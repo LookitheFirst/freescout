@@ -183,6 +183,14 @@ class SendReplyToCustomer implements ShouldQueue
         $cc_array = \App\Misc\Mail::removeEmailFromArray($cc_array, $this->customer_email);
         $bcc_array = \App\Misc\Mail::removeEmailFromArray($bcc_array, $this->customer_email);
 
+        // Auto Cc.
+        if ($mailbox->auto_cc) {
+            $auto_cc = \MailHelper::sanitizeEmails($mailbox->auto_cc);
+            if ($auto_cc) {
+                $cc_array = array_merge($cc_array, $auto_cc);
+            }
+        }
+
         // Auto Bcc.
         if ($mailbox->auto_bcc) {
             $auto_bcc = \MailHelper::sanitizeEmails($mailbox->auto_bcc);

@@ -63,6 +63,20 @@
                             </div>
                         </div>
 
+                        <div class="form-group{{ $errors->has('auto_cc') ? ' has-error' : '' }}">
+                            <label for="auto_cc" class="col-sm-2 control-label">{{ __('Auto Cc') }}</label>
+
+                            <div class="col-sm-6">
+                                <div class="flexy">
+                                    <input id="auto_cc" type="text" class="form-control input-sized" name="auto_cc" value="{{ old('auto_cc', $mailbox->auto_cc) }}" maxlength="255">
+
+                                    <i class="glyphicon glyphicon-info-sign icon-info" data-toggle="popover" data-trigger="hover" data-html="true" data-placement="left"  data-content="{{ __('Send a copy of all outgoing replies to specific external addresses.') }} {{ __('Separate each email with a comma.') }}"></i>
+                                </div>
+
+                                @include('partials/field_error', ['field'=>'auto_cc'])
+                            </div>
+                        </div>
+
                         <div class="form-group{{ $errors->has('auto_bcc') ? ' has-error' : '' }}">
                             <label for="auto_bcc" class="col-sm-2 control-label">{{ __('Auto Bcc') }}</label>
 
@@ -70,7 +84,7 @@
                                 <div class="flexy">
                                     <input id="auto_bcc" type="text" class="form-control input-sized" name="auto_bcc" value="{{ old('auto_bcc', $mailbox->auto_bcc) }}" maxlength="255">
 
-                                    <i class="glyphicon glyphicon-info-sign icon-info" data-toggle="popover" data-trigger="hover" data-html="true" data-placement="left"  data-content="{{ __('Send a copy of all outgoing replies to specific external addresses.') }} {{ __('Separate each email with a comma.') }}"></i>
+                                    <i class="glyphicon glyphicon-info-sign icon-info" data-toggle="popover" data-trigger="hover" data-html="true" data-placement="left"  data-content="{{ __('Send a blind copy of all outgoing replies to specific external addresses.') }} {{ __('Separate each email with a comma.') }}"></i>
                                 </div>
 
                                 @include('partials/field_error', ['field'=>'auto_bcc'])
