@@ -112,12 +112,16 @@ class SecureController extends Controller
                 'type',
                 'email',
                 'status',
-                'conversation',
+                'message',
                 'user',
                 'customer',
             ];
 
-            $activities = SendLog::orderBy('created_at', 'desc')->paginate($page_size);
+            $activities_query = SendLog::orderBy('created_at', 'desc');
+            if ($request->get('thread_id')) {
+                $activities_query->where('thread_id', $request->get('thread_id'));
+            }
+            $activities = $activities_query->paginate($page_size);
 
             foreach ($activities as $record) {
                 $conversation = '';
@@ -132,13 +136,16 @@ class SecureController extends Controller
                         $status .= '. Message-ID: '.$record->message_id;
                     }
                 }
+                if ($record->smtp_queue_id) {
+                    $status .= '. SMTP ID: '.$record->smtp_queue_id;
+                }
 
                 $logs[] = [
                     'date'          => $record->created_at,
                     'type'          => $record->getMailTypeName(),
                     'email'         => $record->email,
                     'status'        => $status,
-                    'conversation'  => $conversation,
+                    'message'       => $conversation,
                     'user'          => $record->user,
                     'customer'      => $record->customer,
                 ];
@@ -170,7 +177,7 @@ class SecureController extends Controller
 
         $name = '';
         if (!empty($request->name)) {
-            $activities = ActivityLog::inLog($request->name)->orderBy('created_at', 'desc')->get();
+            //$activities = ActivityLog::inLog($request->name)->orderBy('created_at', 'desc')->get();
             $name = $request->name;
         } elseif (count($names = ActivityLog::select('log_name')->distinct()->get()->pluck('log_name'))) {
             $name = ActivityLog::NAME_OUT_EMAILS;
@@ -208,7 +215,7 @@ class SecureController extends Controller
         }
 
         if (!$request->hasFile('file') || !$request->file('file')->isValid() || !$request->file) {
-            $response['msg'] = __('Error occured uploading file');
+            $response['msg'] = __('Error occurred uploading file');
         }
 
         if (!$response['msg']) {
@@ -220,7 +227,7 @@ class SecureController extends Controller
                 $response['status'] = 'success';
                 $response['url'] = Helper::uploadedFileUrl($filename);
             } else {
-                $response['msg'] = __('Error occured uploading file');
+                $response['msg'] = __('Error occurred uploading file');
             }
         }
 

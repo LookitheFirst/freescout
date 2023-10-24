@@ -28,13 +28,18 @@ class ModulesController extends Controller
     {
         $installed_modules = [];
         $modules_directory = [];
+        $third_party_modules = [];
         $all_modules = [];
         $flashes = [];
         $updates_available = false;
 
         $flash = \Cache::get('modules_flash');
         if ($flash) {
-            $flashes[] = $flash;
+            if (is_array($flash) && !isset($flash['text'])) {
+                $flashes = $flash;
+            } else {
+                $flashes[] = $flash;
+            }
             \Cache::forget('modules_flash');
         }
 
@@ -54,7 +59,7 @@ class ModulesController extends Controller
         \Module::clearCache();
         $modules = \Module::all();
         foreach ($modules as $module) {
-            $installed_modules[] = [
+            $module_data = [
                 'alias'                        => $module->getAlias(),
                 'name'                         => $module->getName(),
                 'description'                  => $module->getDescription(),
@@ -74,6 +79,8 @@ class ModulesController extends Controller
                 // Determined later
                 'new_version'        => '',
             ];
+            $module_data = \App\Module::formatModuleData($module_data);
+            $installed_modules[] = $module_data;
         }
 
         // No need, as we update modules list on each page load
@@ -85,6 +92,9 @@ class ModulesController extends Controller
         // Prepare directory modules
         if (is_array($modules_directory)) {
             foreach ($modules_directory as $i_dir => $dir_module) {
+
+                $modules_directory[$i_dir] = \App\Module::formatModuleData($dir_module);
+
                 // Remove modules without aliases
                 if (empty($dir_module['alias'])) {
                     unset($modules_directory[$i_dir]);
@@ -117,17 +127,31 @@ class ModulesController extends Controller
                 }
                 $modules_directory[$i_dir]['active'] = \App\Module::isActive($dir_module['alias']);
                 $modules_directory[$i_dir]['activated'] = false;
+
+                // Do not show third-party modules in Modules Derectory.
+                if (\App\Module::isThirdParty($dir_module)) {
+                    $third_party_modules[] = $modules_directory[$i_dir];
+                    unset($modules_directory[$i_dir]);
+                }
             }
         } else {
             $modules_directory = [];
         }
 
+        // Check modules symlinks. Somestimes instead of symlinks folders with files appear.
+        
+        $invalid_symlinks = \App\Module::checkSymlinks(
+            collect($installed_modules)->where('active', true)->pluck('alias')->toArray()
+        );
+
         return view('modules/modules', [
             'installed_modules' => $installed_modules,
             'modules_directory' => $modules_directory,
+            'third_party_modules' => $third_party_modules,
             'flashes'           => $flashes,
             'updates_available' => $updates_available,
             'all_modules'       => $all_modules,
+            'invalid_symlinks'  => $invalid_symlinks,
         ]);
     }
 
@@ -220,10 +244,10 @@ class ModulesController extends Controller
                                             \Session::flash('flash_error_floating', $response['msg']);
                                         }
 
-                                        \Session::flash('flash_error_unescaped', __('Error occured downloading the module. Please :%a_being%download:%a_end% module manually and extract into :folder', ['%a_being%' => '<a href="'.$license_details['download_link'].'" target="_blank">', '%a_end%' => '</a>', 'folder' => '<strong>'.\Module::getPath().'</strong>']));
+                                        \Session::flash('flash_error_unescaped', __('Error occurred downloading the module. Please :%a_being%download:%a_end% module manually and extract into :folder', ['%a_being%' => '<a href="'.$license_details['download_link'].'" target="_blank">', '%a_end%' => '</a>', 'folder' => '<strong>'.\Module::getPath().'</strong>']));
                                     }
                                 } else {
-                                    $response['msg'] = __('Error occured. Please try again later.');
+                                    $response['msg'] = __('Error occurred. Please try again later.');
                                 }
                             } else {
                                 // Just activate license
@@ -233,9 +257,9 @@ class ModulesController extends Controller
                                 $response['status'] = 'success';
                             }
                         } elseif (!empty($result['error'])) {
-                            $response['msg'] = $this->getErrorMessage($result['error'], $result);
+                            $response['msg'] = \App\Module::getErrorMessage($result['error'], $result);
                         } else {
-                            $response['msg'] = __('Error occured. Please try again later.');
+                            $response['msg'] = __('Error occurred. Please try again later.');
                         }
                     }
                 }
@@ -278,8 +302,24 @@ class ModulesController extends Controller
                                 case 'inactive':
                                     $response['msg'] = __('License key has not been activated yet');
                                 case 'site_inactive':
-                                    $response['msg'] = __('Your domain is deactivated');
+                                    $response['msg'] = __('No activations left for this license key').' ('.__("Use 'Deactivate License' link above to transfer license key from another domain").')';
                                     break;
+                            }
+                        } elseif (!empty($license_result['status']) && $license_result['status'] == 'inactive') {
+                            // Activate the license.
+                            $result = WpApi::activateLicense($params);
+                            if (WpApi::$lastError) {
+                                $response['msg'] = WpApi::$lastError['message'];
+                            } elseif (!empty($result['code']) && !empty($result['message'])) {
+                                $response['msg'] = $result['message'];
+                            } else {
+                                if (!empty($result['status']) && $result['status'] == 'valid') {
+                                    // Success.
+                                } elseif (!empty($result['error'])) {
+                                    $response['msg'] = \App\Module::getErrorMessage($result['error'], $result);
+                                } else {
+                                    // Some unknown error. Do nothing.
+                                }
                             }
                         }
                     }
@@ -299,7 +339,7 @@ class ModulesController extends Controller
                     }
 
                     $type = 'danger';
-                    $msg = __('Error occured activating ":name" module', ['name' => $name]);
+                    $msg = __('Error occurred activating ":name" module', ['name' => $name]);
                     if (session('flashes_floating') && is_array(session('flashes_floating'))) {
                         // If there was any error, module has been deactivated via modules.register_error filter
                         $msg = '';
@@ -317,10 +357,10 @@ class ModulesController extends Controller
 
                     // Check public folder.
                     if ($module && file_exists($module->getPath().DIRECTORY_SEPARATOR.'Public')) {
-                        $public_folder = public_path().\Module::getPublicPath($alias);
-                        if (!file_exists($public_folder)) {
+                        $symlink_path = public_path().\Module::getPublicPath($alias);
+                        if (!file_exists($symlink_path)) {
                             $type = 'danger';
-                            $msg = 'Error occured creating a module symlink ('.$public_folder.'). Please check folder permissions.';
+                            $msg = 'Error occurred creating a module symlink ('.$symlink_path.'). Please check folder permissions.';
                             \App\Module::setActive($alias, false);
                             \Artisan::call('freescout:clear-cache');
                         }
@@ -359,10 +399,10 @@ class ModulesController extends Controller
                 }
 
                 $type = 'danger';
-                $msg = __('Error occured deactivating :name module', ['name' => $name]);
+                $msg = __('Error occurred deactivating :name module', ['name' => $name]);
                 if (strstr($output, 'Configuration cached successfully')) {
                     $type = 'success';
-                    $msg = __('":name" module successfully DEactivated!', ['name' => $name]);
+                    $msg = __('":name" module successfully Deactivated!', ['name' => $name]);
                 }
 
                 // \Session::flash does not work after BufferedOutput
@@ -398,7 +438,7 @@ class ModulesController extends Controller
                     } else {
                         if (!empty($result['status']) && $result['status'] == 'success') {
                             $db_module = \App\Module::getByAlias($alias);
-                            if ($db_module && trim($db_module->license) == trim($license)) {
+                            if ($db_module && trim($db_module->license ?? '') == trim($license ?? '')) {
                                 // Remove remembered license key and deactivate license in DB
                                 \App\Module::deactivateLicense($alias, '');
 
@@ -409,7 +449,7 @@ class ModulesController extends Controller
 
                             // Flash does not work here.
                             $flash = [
-                                'text'      => '<strong>'.__('License successfully DEactivated!').'</strong>',
+                                'text'      => '<strong>'.__('License successfully Deactivated!').'</strong>',
                                 'unescaped' => true,
                                 'type'      => 'success',
                             ];
@@ -417,9 +457,9 @@ class ModulesController extends Controller
 
                             $response['status'] = 'success';
                         } elseif (!empty($result['error'])) {
-                            $response['msg'] = $this->getErrorMessage($result['error'], $result);
+                            $response['msg'] = \App\Module::getErrorMessage($result['error'], $result);
                         } else {
-                            $response['msg'] = __('Error occured. Please try again later.');
+                            $response['msg'] = __('Error occurred. Please try again later.');
                         }
                     }
                 }
@@ -444,110 +484,34 @@ class ModulesController extends Controller
                 break;
 
             case 'update':
-                $alias = $request->alias;
-                $module = \Module::findByAlias($alias);
+                $update_result = \App\Module::updateModule($request->alias);
 
-                if (!$module) {
-                    $response['msg'] = __('Module not found').': '.$alias;
-                }
+                if ($update_result['download_error']) {
+                    $response['reload'] = true;
 
-                // Download new version
-                $download_error = false;
-                if (!$response['msg']) {
-                    $params = [
-                        'license'      => \App\Module::getLicense($alias),
-                        'module_alias' => $alias,
-                        'url'          => \App\Module::getAppUrl(),
-                    ];
-                    $license_details = WpApi::getVersion($params);
+                    if ($update_result['msg']) {
+                        \Session::flash('flash_error_floating', $update_result['msg']);
+                    }
 
-                    if (WpApi::$lastError) {
-                        $response['msg'] = WpApi::$lastError['message'];
-                    } elseif (!empty($license_details['code']) && !empty($license_details['message'])) {
-                        $response['msg'] = $license_details['message'];
-                    } elseif (!empty($license_details['required_app_version']) && !\Helper::checkAppVersion($license_details['required_app_version'])) {
-                        $response['msg'] = 'Module requires app version:'.' '.$license_details['required_app_version'];
-                    } elseif (!empty($license_details['download_link'])) {
-                        // Download module
-                        $module_archive = \Module::getPath().DIRECTORY_SEPARATOR.$alias.'.zip';
-
-                        try {
-                            \Helper::downloadRemoteFile($license_details['download_link'], $module_archive);
-                        } catch (\Exception $e) {
-                            $response['msg'] = $e->getMessage();
-                        }
-
-                        if (!file_exists($module_archive)) {
-                            $download_error = true;
-                        } else {
-                            // Extract
-                            try {
-                                \Helper::unzip($module_archive, \Module::getPath());
-                            } catch (\Exception $e) {
-                                // We will show this as floating message on page reload
-                                $response['msg'] = $e->getMessage();
-                            }
-                            // Check if extracted module exists
-                            \Module::clearCache();
-                            $module = \Module::findByAlias($alias);
-                            if (!$module) {
-                                $download_error = true;
-                            }
-                        }
-
-                        // Remove archive
-                        if (file_exists($module_archive)) {
-                            \File::delete($module_archive);
-                        }
-
-                        if ($download_error) {
-                            $response['reload'] = true;
-
-                            if ($response['msg']) {
-                                \Session::flash('flash_error_floating', $response['msg']);
-                            }
-
-                            \Session::flash('flash_error_unescaped', __('Error occured downloading the module. Please :%a_being%download:%a_end% module manually and extract into :folder', ['%a_being%' => '<a href="'.$license_details['download_link'].'" target="_blank">', '%a_end%' => '</a>', 'folder' => '<strong>'.\Module::getPath().'</strong>']));
-                        }
-                    } elseif ($license_details['status'] && $response['msg'] = $this->getErrorMessage($license_details['status'])) {
-                        //$response['msg'] = ;
-                    } else {
-                        $response['msg'] = __('Error occured. Please try again later.');
+                    if ($update_result['download_msg']) {
+                        \Session::flash('flash_error_unescaped', $update_result['download_msg']);
                     }
                 }
 
-                // Install updated module
-                if (!$response['msg'] && !$download_error) {
-                    $outputLog = new BufferedOutput();
-                    \Artisan::call('freescout:module-install', ['module_alias' => $alias], $outputLog);
-                    $output = $outputLog->fetch();
-
-                    // Get module name
-                    $name = '?';
-                    if ($module) {
-                        $name = $module->getName();
-                    }
+                // Install updated module.
+                if ($update_result['output'] || $update_result['status']) {
 
                     $type = 'danger';
-                    $msg = __('Error occured activating ":name" module', ['name' => $name]);
-                    if (session('flashes_floating') && is_array(session('flashes_floating'))) {
-                        // If there was any error, module has been deactivated via modules.register_error filter
-                        $msg = '';
-                        foreach (session('flashes_floating') as $flash) {
-                            $msg .= $flash['text'].' ';
-                        }
-                    } elseif (strstr($output, 'Configuration cached successfully')) {
+                    $msg = $update_result['msg'];
+
+                    if ($update_result['status'] == 'success') {
                         $type = 'success';
-                        $msg = __('":name" module successfully updated!', ['name' => $name]);
-                    } else {
-                        // Deactivate module
-                        \App\Module::setActive($alias, false);
-                        \Artisan::call('freescout:clear-cache');
+                        $msg = $update_result['msg_success'];
                     }
 
                     // \Session::flash does not work after BufferedOutput
                     $flash = [
-                        'text'      => '<strong>'.$msg.'</strong><pre class="margin-top">'.$output.'</pre>',
+                        'text'      => '<strong>'.$msg.'</strong><pre class="margin-top">'.$update_result['output'].'</pre>',
                         'unescaped' => true,
                         'type'      => $type,
                     ];
@@ -557,51 +521,50 @@ class ModulesController extends Controller
 
                 break;
 
+            case 'update_all':
+                $update_all_flashes = [];
+
+                foreach ($request->aliases as $alias) {
+                    $update_result = \App\Module::updateModule($alias);
+
+                    $type = 'danger';
+                    $msg = $update_result['msg'];
+
+                    if ($update_result['status'] == 'success') {
+                        $type = 'success';
+                        $msg = $update_result['msg_success'];
+                    } elseif ($update_result['download_msg']) {
+                        $msg .= '<br/>'.$update_result['download_msg'];
+                    }
+
+                    $text = '<strong>'.$update_result['module_name'].':</strong> '.$msg;
+                    if (trim($update_result['output'])) {
+                        $text .= '<pre class="margin-top">'.$update_result['output'].'</pre>';
+                    }
+
+                    // \Session::flash does not work after BufferedOutput
+                    $update_all_flashes[] = [
+                        'text'      => $text,
+                        'unescaped' => true,
+                        'type'      => $type,
+                    ];
+                }
+                if ($update_all_flashes) {
+                    \Cache::forever('modules_flash', $update_all_flashes);
+                }
+                $response['status'] = 'success';
+
+                break;
+
             default:
                 $response['msg'] = 'Unknown action';
                 break;
         }
 
         if ($response['status'] == 'error' && empty($response['msg'])) {
-            $response['msg'] = 'Unknown error occured';
+            $response['msg'] = 'Unknown error occurred';
         }
 
         return \Response::json($response);
-    }
-
-    public function getErrorMessage($code, $result = null)
-    {
-        $msg = '';
-
-        switch ($code) {
-            case 'missing':
-                $msg = __('License key does not exist');
-                break;
-            case 'license_not_activable':
-                $msg = __("You have to activate each bundle's module separately");
-                break;
-            case 'disabled':
-                $msg = __('License key has been revoked');
-                break;
-            case 'no_activations_left':
-                $msg = __('No activations left for this license key').' ('.__('Use Deactivate License button to transfer license key from another domain').')';
-                break;
-            case 'expired':
-                $msg = __('License key has expired');
-                break;
-            case 'key_mismatch':
-                $msg = __('License key belongs to another module');
-                break;
-            case 'invalid_item_id':
-                $msg = __('Module not found in the modules directory');
-                break;
-            default:
-                if ($result && !empty($result['error'])) {
-                    $msg = __('Error code:'.' '.$result['error']);
-                }
-                break;
-        }
-
-        return $msg;
     }
 }

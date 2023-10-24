@@ -17,7 +17,19 @@ class ThreadObserver
         // Update data in conversation
         $conversation = $thread->conversation;
 
-        $now = date('Y-m-d H:i:s');
+        if (!$conversation) {
+            return;
+        }
+
+        // Fetch date & time setting.
+        $use_mail_date_on_fetching = config('app.use_mail_date_on_fetching');
+
+        if ($use_mail_date_on_fetching) {
+            $now = $thread->created_at;
+        }else{
+            $now = date('Y-m-d H:i:s');
+        }
+        
         if (!in_array($thread->type, [Thread::TYPE_LINEITEM, Thread::TYPE_NOTE]) && $thread->state == Thread::STATE_PUBLISHED) {
             $conversation->threads_count++;
         }
@@ -42,7 +54,9 @@ class ThreadObserver
         if (in_array($thread->type, [Thread::TYPE_CUSTOMER, Thread::TYPE_MESSAGE, Thread::TYPE_NOTE])
             && $thread->state == Thread::STATE_PUBLISHED
             && !$thread->isForward()
-            && ($conversation->threads_count > 1 || $thread->type == Thread::TYPE_NOTE)
+            // Otherwise preview is not set when conversation is created
+            // outside of the web interface.
+            //&& ($conversation->threads_count > 1 || $thread->type == Thread::TYPE_NOTE)
         ) {
             $conversation->setPreview($thread->body);
         }
@@ -68,5 +82,17 @@ class ThreadObserver
         ) {
             Conversation::refreshConversations($conversation, $thread);
         }
+
+        \Eventy::action('thread.created', $thread);
+    }
+
+    public function deleting(Thread $thread)
+    {
+        \Eventy::action('thread.deleting', $thread);
+    }
+
+    public function updated(Thread $thread)
+    {
+        \Eventy::action('thread.updated', $thread);
     }
 }

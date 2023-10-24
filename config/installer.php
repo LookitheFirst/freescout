@@ -24,6 +24,7 @@ return [
         'key'     => false,
         'publish' => false,
     ],
+    // It must be equal to app.required_extensions
     'requirements' => [
         'php' => [
             'OpenSSL',
@@ -36,7 +37,13 @@ return [
             'GD',
             'fileinfo',
             'ZIP',
-            //'cURL',
+            'iconv',
+            'cURL',
+            'DOM',
+            'libxml',
+            //'pcntl',
+            // We keep it as optional, as it's only used to translate dates.
+            //'intl',
         ],
         // 'apache' => [
         //     'mod_rewrite',
@@ -85,12 +92,12 @@ return [
                 // // ],
                 // 'app_log_level'         => 'required|string|max:50',
                 'app_url'               => 'required|url',
-                'database_connection'   => 'required|string|max:50',
-                'database_hostname'     => 'required|string|max:50',
+                'database_connection'   => 'required|string|max:1000',
+                'database_hostname'     => 'required|string|max:1000',
                 'database_port'         => 'required|numeric',
-                'database_name'         => 'required|string|max:50',
-                'database_username'     => 'required|string|max:50',
-                'database_password'     => 'required|string|max:50',
+                'database_name'         => 'required|string|max:1000',
+                'database_username'     => 'required|string|max:1000',
+                'database_password'     => 'required|string|max:1000',
                 'admin_email'           => 'required|email',
                 'admin_first_name'      => 'required|string|max:20',
                 'admin_last_name'       => 'required|string|max:30',

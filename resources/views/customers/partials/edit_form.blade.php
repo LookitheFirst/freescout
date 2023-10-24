@@ -12,7 +12,7 @@
                     <label for="first_name" class="col-sm-2 control-label">{{ __('First Name') }}</label>
 
                     <div class="col-sm-6">
-                        <input id="first_name" type="text" class="form-control input-sized-lg" name="first_name" value="{{ old('first_name', $customer->first_name) }}" maxlength="20">
+                        <input id="first_name" type="text" class="form-control input-sized-lg" name="first_name" value="{{ old('first_name', $customer->first_name) }}" maxlength="255">
 
                         @include('partials/field_error', ['field'=>'first_name'])
                     </div>
@@ -22,7 +22,7 @@
                     <label for="last_name" class="col-sm-2 control-label">{{ __('Last Name') }}</label>
 
                     <div class="col-sm-6">
-                        <input id="last_name" type="text" class="form-control input-sized-lg" name="last_name" value="{{ old('last_name', $customer->last_name) }}" maxlength="30">
+                        <input id="last_name" type="text" class="form-control input-sized-lg" name="last_name" value="{{ old('last_name', $customer->last_name) }}" maxlength="255">
 
                         @include('partials/field_error', ['field'=>'last_name'])
                     </div>
@@ -36,21 +36,21 @@
                             @foreach (old('emails', $emails) as $i => $email)
                                 <div class="multi-item {{ $errors->has('emails.'.$i) ? ' has-error' : '' }}">
                                     <div>
-                                        <input type="text" class="form-control input-sized-lg" name="emails[]" value="{{ $email }}" maxlength="191">
-                                        <a href="javascript:void(0)" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
+                                        <input type="email" class="form-control input-sized-lg" name="emails[]" value="{{ $email }}" maxlength="191">
+                                        <a href="#" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
                                     </div>
 
                                     @include('partials/field_error', ['field'=>'emails.'.$i])
                                 </div>
                             @endforeach
-                            <p class="block-help"><a href="javascript:void(0)" class="multi-add " tabindex="-1">{{ __('Add an email address') }}</a></p>
+                            <p class="block-help"><a href="#" class="multi-add " tabindex="-1">{{ __('Add an email address') }}</a></p>
                         </div>
 
                         {{-- @include('partials/field_error', ['field'=>'emails.*']) --}}
                     </div>
                 </div>
 
-                <div class="form-group{{ $errors->has('websites') ? ' has-error' : '' }} margin-bottom-0">
+                <div class="form-group{{ $errors->has('phones') ? ' has-error' : '' }} margin-bottom-0">
                     <label for="phones" class="col-sm-2 control-label">{{ __('Phone') }}</label>
 
                     <div class="col-sm-6">
@@ -59,15 +59,20 @@
                                 @if (!empty($phone['type']) && isset($phone['value']))
                                     <div class="multi-item">
                                         <div>
-                                            {{-- We are keeping it simple and don't show phone type --}}
-                                            <input type="hidden" class="form-control input-sized-lg" name="phones[{{ $i }}][type]" value="{{ $phone['type'] }}">
-                                            <input type="text" class="form-control input-sized-lg" name="phones[{{ $i }}][value]" value="{{ $phone['value'] }}">
-                                            <a href="javascript:void(0)" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
+                                            <div class="input-group input-group-flex input-sized-lg">
+                                                <select class="form-control" name="phones[{{ $i }}][type]">
+                                                    @foreach(\App\Customer::$phone_types as $phone_type => $name)
+                                                        <option value="{{$phone_type}}" {{ $phone_type == $phone['type'] ? 'selected="selected' : '' }}>{{ \App\Customer::getPhoneTypeName($phone_type) }}</option>
+                                                    @endforeach
+                                                </select>
+                                                <input type="tel" class="form-control " name="phones[{{ $i }}][value]" value="{{ $phone['value'] }}">
+                                            </div>
+                                            <a href="#" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
                                         </div>
                                     </div>
                                 @endif
                             @endforeach
-                            <p class="block-help" data-max-i="{{ $i }}"><a href="javascript:void(0)" class="multi-add" tabindex="-1">{{ __('Add a phone number') }}</a></p>
+                            <p class="block-help" data-max-i="{{ $i }}"><a href="#" class="multi-add" tabindex="-1">{{ __('Add a phone number') }}</a></p>
                         </div>
 
                         @include('partials/field_error', ['field'=>'phones'])
@@ -102,12 +107,12 @@
                             @foreach ($customer->getWebsites(true) as $website)
                                 <div class="multi-item">
                                     <div>
-                                        <input type="text" class="form-control input-sized-lg" name="websites[]" value="{{ $website }}" maxlength="100">
-                                        <a href="javascript:void(0)" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
+                                        <input type="url" class="form-control input-sized-lg" name="websites[]" value="{{ $website }}" maxlength="100">
+                                        <a href="#" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
                                     </div>
                                 </div>
                             @endforeach
-                            <p class="block-help"><a href="javascript:void(0)" class="multi-add" tabindex="-1">{{ __('Add a website') }}</a></p>
+                            <p class="block-help"><a href="#" class="multi-add" tabindex="-1">{{ __('Add a website') }}</a></p>
                         </div>
 
                         @include('partials/field_error', ['field'=>'websites'])
@@ -133,12 +138,12 @@
                                                 <span class="input-group-btn" style="width:0px;"></span>
                                                 <input type="text" class="form-control" name="social_profiles[{{ $i }}][value]" value="{{ $social_profile['value'] }}">
                                             </div>
-                                            <a href="javascript:void(0)" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
+                                            <a href="#" class="multi-remove" tabindex="-1"><i class="glyphicon glyphicon-remove"></i></a>
                                         </div>
                                     </div>
                                 @endif
                             @endforeach
-                            <p class="block-help" data-max-i="{{ $i }}"><a href="javascript:void(0)" class="multi-add" tabindex="-1">{{ __('Add a social profile') }}</a></p>
+                            <p class="block-help" data-max-i="{{ $i }}"><a href="#" class="multi-add" tabindex="-1">{{ __('Add a social profile') }}</a></p>
                         </div>
 
                         @include('partials/field_error', ['field'=>'social_profiles'])
@@ -182,14 +187,14 @@
                         </select>
 
                         <div class="block-help small margin-bottom-0">
-                            <a href="javascript:$('#address-collapse').toggleClass('hidden');void(0);">{{ __('Address') }} <span class="caret"></span></a>
+                            <a href="#address-collapse" data-toggle="collapse">{{ __('Address') }} <span class="caret"></span></a>
                         </div>
 
                         @include('partials/field_error', ['field'=>'country'])
                     </div>
                 </div>
 
-                <div id="address-collapse" @if (empty(old('state', $customer->state)) && empty(old('city', $customer->city)) && empty(old('address', $customer->address)) && empty(old('zip', $customer->zip)))class="hidden" @endif>
+                <div id="address-collapse" @if (empty(old('state', $customer->state)) && empty(old('city', $customer->city)) && empty(old('address', $customer->address)) && empty(old('zip', $customer->zip)))@else class="collapse in" @endif>
 
                     <div class="form-group{{ $errors->has('state') ? ' has-error' : '' }}">
                         <label for="state" class="col-sm-2 control-label">{{ __('State') }}</label>
@@ -231,7 +236,7 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="form-group{{ $errors->has('photo_url') ? ' has-error' : '' }} margin-bottom-0">
                     <label for="photo_url" class="col-sm-2 control-label">{{ __('Photo') }}</label>
 

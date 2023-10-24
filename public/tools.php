@@ -100,12 +100,12 @@ if (!empty($_POST)) {
                 try {
 
                     // First check PHP version
-                    $version_output = shell_exec($php_path.' -v');
+                    $version_output = shell_exec($php_path.' -r "echo phpversion();"');
 
-                    if (!strstr($version_output, 'PHP 7.')) {
+                    if (!version_compare($version_output, '7.1', '>=')) {
                         $alerts[] = [
                             'type' => 'danger',
-                            'text' => 'Incorrect PHP version (7.x is required):<br/><br/><pre>'.htmlspecialchars($version_output).'</pre>',
+                            'text' => 'Incorrect PHP version (7.1+ is required):<br/><br/><pre>'.htmlspecialchars($version_output).'</pre>',
                         ];
                     } else {
                         if ($_POST['action'] == 'update') {
@@ -134,7 +134,7 @@ if (!empty($_POST)) {
                 } catch (\Exception $e) {
                     $alerts[] = [
                         'type' => 'danger',
-                        'text' => 'Error occured: '.htmlspecialchars($e->getMessage()),
+                        'text' => 'Error occurred: '.htmlspecialchars($e->getMessage()),
                     ];
                 }
             }
@@ -185,7 +185,7 @@ if (!empty($_POST)) {
 		                </div>
 						<div class="form-group <?php if (!empty($errors['php_path'])):?>has-error<?php endif ?>">
 		                    <label for="php_path">
-		                        <strong>Path to PHP 7.x</strong> (example: /usr/local/php72/bin/php)
+		                        <strong>Path to PHP</strong> (example: /usr/local/php81/bin/php)
 		                    </label>
 		                    <input type="text" name="php_path" value="<?php echo htmlentities($_POST['php_path'] ?? ''); ?>" placeholder="(optional)"/>
 		                    <?php if (!empty($errors['php_path'])): ?>

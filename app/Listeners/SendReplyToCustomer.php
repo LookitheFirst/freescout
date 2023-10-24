@@ -23,9 +23,11 @@ class SendReplyToCustomer
     {
         $conversation = $event->conversation;
 
-        // Do not send email if this is a Phone conversation.
+        // Do not send email if this is a Phone conversation and customer has no email.
         if ($conversation->isPhone()) {
-            return;
+            if (!$conversation->customer->getMainEmail()) {
+                return;
+            }
         }
 
         $replies = $conversation->getReplies();
@@ -33,6 +35,18 @@ class SendReplyToCustomer
         // Ignore imported messages.
         if ($replies && $replies->first() && $replies->first()->imported) {
             return;
+        }
+
+        // Remove threads added after this event had fired.
+        $thread = $event->last_thread ?? $event->thread ?? null;
+        if ($thread) {
+            foreach ($replies as $i => $reply) {
+                if ($reply->id == $thread->id) {
+                    break;
+                } else {
+                    $replies->forget($i);
+                }
+            }
         }
 
         // Chat conversation.

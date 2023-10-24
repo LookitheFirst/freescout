@@ -31,8 +31,8 @@
                     <h2>{{ __("New Conversation") }}</h2>
 
                     <div class="btn-group">
-                        <button type="button" class="btn btn-default active" id="email-conv-switch" onclick="switchToNewEmailConversation({{ App\Conversation::TYPE_EMAIL }})"><i class="glyphicon glyphicon-envelope"></i></button>
-                        <button type="button" class="btn btn-default" id="phone-conv-switch" onclick="switchToNewPhoneConversation()"><i class="glyphicon glyphicon-earphone"></i></button>
+                        <button type="button" class="btn btn-default active" id="email-conv-switch"><i class="glyphicon glyphicon-envelope"></i></button>
+                        <button type="button" class="btn btn-default" id="phone-conv-switch"><i class="glyphicon glyphicon-earphone"></i></button>
                     </div>
                 </div>
 
@@ -129,9 +129,23 @@
                                 </div>
 
                                 <div class="col-sm-9 col-sm-offset-2 toggle-field phone-conv-fields" id="toggle-email">
-                                    <a href="javascript:void(0);">{{ __('Add Email') }}</a>
+                                    <a href="#">{{ __('Add Email') }}</a>
                                 </div>
                             </div>
+
+                            @if (count($from_aliases))
+                                <div class="form-group email-conv-fields">
+                                    <label class="col-sm-2 control-label">{{ __('From') }}</label>
+
+                                    <div class="col-sm-9">
+                                        <select name="from_alias" class="form-control">
+                                            @foreach ($from_aliases as $from_alias_email => $from_alias_name)
+                                                <option value="@if ($from_alias_email != $mailbox->email){{ $from_alias_email }}@endif" @if (!empty($from_alias) && $from_alias == $from_alias_email)selected="selected"@endif>@if ($from_alias_name){{ $from_alias_email }} ({{ $from_alias_name }})@else{{ $from_alias_email }}@endif</option>
+                                            @endforeach
+                                        </select>
+                                    </div>
+                                </div>
+                            @endif
 
                             <div class="form-group{{ $errors->has('to') ? ' has-error' : '' }}" id="field-to">
                                 <label for="to" class="col-sm-2 control-label">{{ __('To') }}</label>
@@ -188,7 +202,7 @@
                             </div>
 
                             <div class="col-sm-9 col-sm-offset-2 email-conv-fields toggle-field @if ($conversation->cc && $conversation->bcc) hidden @endif">
-                                <a href="javascript:void(0);" class="help-link" id="toggle-cc">Cc/Bcc</a>
+                                <a href="#" class="help-link" id="toggle-cc">Cc/Bcc</a>
                             </div>
 
                             <div class="form-group{{ $errors->has('subject') ? ' has-error' : '' }}">

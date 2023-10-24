@@ -1,5 +1,11 @@
 <?php
 
+$key = env('APP_KEY', null);
+$key_file = env("APP_KEY_FILE", null);
+if (empty($key) && !empty($key_file)) {
+    $key = trim(file_get_contents($key_file));
+}
+
 return [
 
     /*
@@ -12,7 +18,7 @@ return [
     | or any other location as required by the application or its packages.
     */
 
-    'version' => '1.8.11',
+    'version' => '1.8.105',
 
     /*
     |--------------------------------------------------------------------------
@@ -92,7 +98,7 @@ return [
     */
 
     'locale'          => env('APP_LOCALE', 'en'),
-    'locales'         => ['en', 'hr', 'da', 'nl', 'fr', 'de', 'ja', 'it', 'fa', 'pl', 'pt-PT', 'pt-BR', 'ru', 'es', 'sk', 'sv'],
+    'locales'         => ['en', 'zh-CN', 'hr', 'cs', 'da', 'nl', 'fi', 'fr', 'de', 'it', 'ja', 'ko', 'no', 'fa', 'pl', 'pt-PT', 'pt-BR', 'ru', 'es', 'sk', 'sv'],
     'locales_rtl'     => ['fa'],
     'default_locale'  => 'en',
 
@@ -126,7 +132,7 @@ return [
     |
     */
 
-    'key' => env('APP_KEY'),
+    'key' => $key,
 
     'cipher' => 'AES-256-CBC',
 
@@ -182,27 +188,21 @@ return [
     | Checks for new jobs every --sleep seconds.
     | If --tries is set and job fails it is being processed right away without any delay.
     | --delay parameter does not work to set delays between retry attempts.
+    | --timeout parameter sets job timeout and is used to avoid queue:work stucking.
     |
     | Jobs sending emails are retried manually in handle().
     | Number of retries is set in each job class.
     |-------------------------------------------------------------------------
     */
-    'queue_work_params' => ['--queue' => 'emails,default', '--sleep' => '5', '--tries' => '1'],
+    'queue_work_params' => ['--queue' => 'emails,default', '--sleep' => '5', '--tries' => '1', '--timeout' => '1800'],
 
     /*
     |--------------------------------------------------------------------------
     | PHP extensions required by the app
+    | Replaced with installer.requirements.php
     |-------------------------------------------------------------------------
     */
-    'required_extensions' => ['mysql / mysqli', 'mbstring', 'xml', 'imap', /*'mcrypt' mcrypt is deprecated*/ 'json', 'gd', 'fileinfo', 'openssl', 'zip', 'tokenizer', 'curl'/*, 'dom', 'xmlwriter', 'libxml', 'phar'*/],
-
-    /*
-    |--------------------------------------------------------------------------
-    | Enable if using CloudFlare "Flexible SSL":
-    | https://support.cloudflare.com/hc/en-us/articles/200170416-What-do-the-SSL-options-mean-
-    |-------------------------------------------------------------------------
-    */
-    'force_https' => env('APP_FORCE_HTTPS', false),
+    //'required_extensions' => ['mysql / mysqli', 'mbstring', 'xml', 'imap', /*'mcrypt' mcrypt is deprecated*/ 'json', 'gd', 'fileinfo', 'openssl', 'zip', 'tokenizer', 'curl', 'iconv'/*, 'dom', 'xmlwriter', 'libxml', 'phar'*/],
 
     /*
     |--------------------------------------------------------------------------
@@ -246,6 +246,7 @@ return [
         'alert_fetch_period' => ['default' => 15], // min
         'email_branding'     => ['default' => true],
         'open_tracking'      => ['default' => true],
+        'subscription_defaults' => ['default' => []],
     ],
 
     /*
@@ -263,9 +264,14 @@ return [
     |--------------------------------------------------------------------------
     | File types which should be viewed in the browser instead of downloading.
     | SVG images are not viewable to avid XSS.
+    | The list should be in sync with /storage/app/public/uploads/.htaccess and nginx config.
     |-------------------------------------------------------------------------
     */
-    'viewable_attachments'    => env('APP_VIEWABLE_ATTACHMENTS', ['jpg', 'jpeg', 'jfif', 'pjpeg', 'pjp', 'apng', 'bmp', 'gif', 'ico', 'cur', 'png', 'tif', 'tiff', 'webp', 'pdf', 'txt', 'mp3', 'wav', 'ogg', 'wma']),
+    'viewable_attachments'    => env('APP_VIEWABLE_ATTACHMENTS', ['jpg', 'jpeg', 'jfif', 'pjpeg', 'pjp', 'apng', 'bmp', 'gif', 'ico', 'cur', 'png', 'tif', 'tiff', 'webp', 'pdf', 'txt', 'diff', 'patch', 'json', 'mp3', 'wav', 'ogg', 'wma']),
+    // Additional restriction by mime type.
+    // If HTML file is renamed into .txt for example it will be shown by the browser as HTML.
+    // Regular expressions (#...#)
+    'viewable_mime_types'    => env('APP_VIEWABLE_MIME_TYPES', ['image/.*', 'application/pdf', 'text/plain', 'text/x-diff', 'application/json', 'audio/.*']),
 
     /*
     |--------------------------------------------------------------------------
@@ -279,7 +285,7 @@ return [
     |
     |-------------------------------------------------------------------------
     */
-    'no_retry_mail_errors'    => env('APP_NO_RETRY_MAIL_ERRORS', '(no valid recipients|does not comply with RFC)'),
+    'no_retry_mail_errors'    => env('APP_NO_RETRY_MAIL_ERRORS', '(no valid recipients|does not comply with RFC|message file too big)'),
 
     /*
     |--------------------------------------------------------------------------
@@ -315,6 +321,14 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Use date from mail header on fetching.
+    |
+    |-------------------------------------------------------------------------
+    */
+    'use_mail_date_on_fetching'    => env('APP_USE_MAIL_DATE_ON_FETCHING', false),
+
+     /*
+    |--------------------------------------------------------------------------
     | Dashboard path.
     |
     |-------------------------------------------------------------------------
@@ -343,6 +357,117 @@ return [
     |--------------------------------------------------------------------------
     */
     'disable_updating'    => env('APP_DISABLE_UPDATING', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Use custom conversation numbers instead of conversation ID.
+    |--------------------------------------------------------------------------
+    */
+    'custom_number' => env('APP_CUSTOM_NUMBER', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Enter your proxy address in .env file if freescout.net is not available from your server
+    | (access to freescout.net is required to obtain official modules)
+    |--------------------------------------------------------------------------
+    */
+    'proxy' => env('APP_PROXY', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Custom headers to add to all outgoing emails.
+    | https://github.com/freescout-helpdesk/freescout/issues/2546#issuecomment-1380414908
+    |--------------------------------------------------------------------------
+    */
+    'custom_mail_headers' => env('APP_CUSTOM_MAIL_HEADERS', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Library used to fetch emails: webklex/laravel-imap, webklex/php-imap
+    |-------------------------------------------------------------------------
+    */
+    'new_fetching_library'    => env('APP_NEW_FETCHING_LIBRARY', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Timeout for curl and GuzzleHttp.
+    |-------------------------------------------------------------------------
+    */
+    // Should be set for curl and Guzzle.
+    'curl_timeout'         => env('APP_CURL_TIMEOUT', 40),
+    // Should be set for Guzzle. Curl has default CURLOPT_CONNECTTIMEOUT=30 sec.
+    'curl_connect_timeout' => env('APP_CURL_CONNECTION_TIMEOUT', 30),
+    // CloudFlare may block requests without user agent.
+    // Need to be set for curl. Guzzle sends it's own user agent: GuzzleHttp/6.3.3 curl/7.58.0 PHP/8.2.5
+    'curl_user_agent'      => env('APP_CURL_USER_AGENT', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 7_1_4) AppleWebKit/603.26 (KHTML, like Gecko) Chrome/55.0.3544.220 Safari/534'),
+    // Should be set for curl and Guzzle.
+    'curl_ssl_verifypeer'  => env('APP_CURL_SSL_VERIFYPEER', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Customer photo size (px).
+    | https://github.com/freescout-helpdesk/freescout/issues/2919
+    |-------------------------------------------------------------------------
+    */
+    'customer_photo_size'    => env('APP_CUSTOMER_PHOTO_SIZE', 64),
+
+
+    /*
+    |--------------------------------------------------------------------------
+    | User photo size (px).
+    |-------------------------------------------------------------------------
+    */
+    'user_photo_size'    => env('APP_USER_PHOTO_SIZE', 50),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Use this option if you have many folders and you are experiencing
+    | performance issues. When this option is enabled sometimes it may take 
+    | several seconds for folders counters to update in the interface.
+    | 
+    | https://github.com/freescout-helpdesk/freescout/pull/2982
+    |-------------------------------------------------------------------------
+    */
+    'update_folder_counters_in_background'    => env('APP_UPDATE_FOLDER_COUNTERS_IN_BACKGROUND', false),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Experimental feature allowing to specify users who can see only conversations 
+    | assigned to themselves. For such users only Mine folder shows actual number of conversations.
+    | This option does not affect admin users.
+    |
+    | The option should be specified as a comma separated list of user IDs which
+    | can be found in the their profile URL (/users/profile/7).
+    |
+    | Example: 7,5,31
+    |-------------------------------------------------------------------------
+    */
+    'show_only_assigned_conversations'    => env('APP_SHOW_ONLY_ASSIGNED_CONVERSATIONS', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | By default X-Frame-Options header is enabled and set to SAMEORIGIN.
+    | Via this option you can disable it (APP_X_FRAME_OPTIONS=false) or set custom value:
+    | - DENY
+    | - ALLOW-FROM example.org
+    |-------------------------------------------------------------------------
+    */
+    'x_frame_options'    => env('APP_X_FRAME_OPTIONS', true),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Enable Content-Security-Policy meta tag to prevent possible XSS attacks.
+    |-------------------------------------------------------------------------
+    */
+    'csp_enabled'    => env('APP_CSP_ENABLED', true),
+    'csp_script_src' => env('APP_CSP_SCRIPT_SRC', ''),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Let the application know that CloudFlare is used (for proper client IP detection).
+    |-------------------------------------------------------------------------
+    */
+    'cloudflare_is_used'    => env('APP_CLOUDFLARE_IS_USED', false),
 
     /*
     |--------------------------------------------------------------------------
@@ -462,6 +587,8 @@ return [
         // Custom
         'Helper'       => App\Misc\Helper::class,
         'MailHelper'   => App\Misc\Mail::class,
+        'ModuleHelper' => App\Module::class,
+        'WpApi'        => App\Misc\WpApi::class,
         'Option'       => App\Option::class,
         'Str'          => Illuminate\Support\Str::class,
         // Autodiscovery did not work for this one, becasuse it's composer.json

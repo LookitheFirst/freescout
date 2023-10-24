@@ -419,11 +419,14 @@ class UrlGenerator implements UrlGeneratorContract
         if (is_null($root)) {
             if (is_null($this->cachedRoot)) {
                 // $this->request->root() does not determine subdirectory properly.
-                $this->cachedRoot = $this->forcedRoot ?: config('app.url');
+                $this->cachedRoot = \Eventy::filter('url_generator.app_url', $this->forcedRoot ?: config('app.url'));
 
                 if (!$this->cachedRoot || \Helper::isDefaultAppUrl($this->cachedRoot)) {
                     $this->cachedRoot = $this->request->root();
                 }
+
+                // Remove the slash at the end as on some systems there is a slash at the end.
+                $this->cachedRoot = rtrim($this->cachedRoot, "/");
             }
 
             $root = $this->cachedRoot;

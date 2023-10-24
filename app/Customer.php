@@ -3,6 +3,7 @@
 namespace App;
 
 use App\Email;
+use App\CustomerChannel;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
@@ -15,7 +16,6 @@ class Customer extends Model
     public $rememberCacheDriver = 'array';
 
     const PHOTO_DIRECTORY = 'customers';
-    const PHOTO_SIZE = 64; // px
     const PHOTO_QUALITY = 77;
 
     /**
@@ -50,10 +50,10 @@ class Customer extends Model
     public static $phone_types = [
         self::PHONE_TYPE_WORK   => 'work',
         self::PHONE_TYPE_HOME   => 'home',
-        self::PHONE_TYPE_OTHER  => 'other',
         self::PHONE_TYPE_MOBILE => 'mobile',
         self::PHONE_TYPE_FAX    => 'fax',
         self::PHONE_TYPE_PAGER  => 'pager',
+        self::PHONE_TYPE_OTHER  => 'other',
     ];
 
     /**
@@ -490,7 +490,7 @@ class Customer extends Model
      */
     public function getMainEmail()
     {
-        return optional($this->emails_cached()->first())->email;
+        return optional($this->emails_cached()->first())->email.'';
     }
 
     /**
@@ -596,12 +596,19 @@ class Customer extends Model
                     $this->emails()->saveMany($new_emails);
                 }
             }
-            // Create customers for deleted emails
+
             foreach ($deleted_emails as $email) {
-                $customer = new self();
-                $customer->save();
-                $email->customer()->associate($customer);
-                $email->save();
+                if (Conversation::where('customer_email', $email->email)->exists()) {
+                    // Create customers for deleted emails
+                    // if there is a conversation with 'customer_email'.
+                    $customer = new self();
+                    $customer->save();
+                    $email->customer()->associate($customer);
+                    $email->save();
+                } else {
+                    // Simply delete an email.
+                    $email->delete();
+                }
             }
         }
     }
@@ -635,12 +642,23 @@ class Customer extends Model
             return $phones;
         } elseif ($dummy_if_empty) {
             return [[
-                'type' => self::PHONE_TYPE_WORK,
                 'value' => '',
+                'type' => self::PHONE_TYPE_WORK,
             ]];
         } else {
             return [];
         }
+    }
+
+    public function getMainPhoneValue()
+    {
+        return $this->getMainPhoneNumber();
+    }
+
+    public function getMainPhoneNumber()
+    {
+        $phones = $this->getPhones();
+        return $phones[0]['value'] ?? '';
     }
 
     /**
@@ -685,12 +703,14 @@ class Customer extends Model
                     $phones[] = [
                         'value' => (string) $phone['value'],
                         'type'  => (int) $phone['type'],
+                        'n'     => (string)\Helper::phoneToNumeric($phone['value']),
                     ];
                 }
             } else {
                 $phones[] = [
                     'value' => (string) $phone,
-                    'type'  => self::PHONE_TYPE_WORK
+                    'type'  => self::PHONE_TYPE_WORK,
+                    'n'     => (string)\Helper::phoneToNumeric($phone),
                 ];
             }
         }
@@ -721,8 +741,16 @@ class Customer extends Model
      */
     public static function findByPhone($phone)
     {
-        $phone = trim($phone);
-        return Customer::where('phones', 'LIKE', '%"'.$phone.'"%')->first();
+        return Customer::byPhone($phone)->first();
+    }
+
+    /**
+     * Get query.
+     */
+    public static function byPhone($phone)
+    {
+        $phone_numeric = \Helper::phoneToNumeric($phone);
+        return Customer::where('phones', 'LIKE', '%"'.$phone_numeric.'"%');
     }
 
     /**
@@ -761,6 +789,12 @@ class Customer extends Model
         } else {
             return [];
         }
+    }
+
+    public function getMainWebsite()
+    {
+        $websites = $this->getWebsites();
+        return $websites[0] ?? '';
     }
 
     /**
@@ -833,12 +867,16 @@ class Customer extends Model
                     }
 
                     $social_profiles[] = [
+                        // Order of elements in array is important as we rely on it
+                        // when searching customers by social profiles using "like".
                         'value' => (string) $social_profile['value'],
                         'type'  => $type,
                     ];
                 }
             } else {
                 $social_profiles[] = [
+                    // Order of elements in array is important as we rely on it
+                    // when searching customers by social profiles using "like".
                     'value' => (string) $social_profile,
                     'type'  => self::SOCIAL_TYPE_OTHER,
                 ];
@@ -1224,7 +1262,7 @@ class Customer extends Model
                 return '';
             }
         } else {
-            return asset('/img/default-avatar.png');
+            return \Eventy::filter('customer.default_avatar', asset('/img/default-avatar.png'), $this);
         }
     }
 
@@ -1238,7 +1276,8 @@ class Customer extends Model
      */
     public function savePhoto($real_path, $mime_type)
     {
-        $resized_image = \App\Misc\Helper::resizeImage($real_path, $mime_type, self::PHOTO_SIZE, self::PHOTO_SIZE);
+        $photo_size = config('app.customer_photo_size');
+        $resized_image = \App\Misc\Helper::resizeImage($real_path, $mime_type, $photo_size, $photo_size);
 
         if (!$resized_image) {
             return false;
@@ -1249,7 +1288,7 @@ class Customer extends Model
 
         $dest_dir = pathinfo($dest_path, PATHINFO_DIRNAME);
         if (!file_exists($dest_dir)) {
-            \File::makeDirectory($dest_dir, 0755);
+            \File::makeDirectory($dest_dir, \Helper::DIR_PERMISSIONS);
         }
 
         // Remove current photo
@@ -1338,13 +1377,13 @@ class Customer extends Model
             return false;
         }
 
-        $image_data = file_get_contents($url);
+        $image_data = \Helper::getRemoteFileContents($url);
 
         if (!$image_data) {
             return false;
         }
 
-        $temp_file = tempnam(sys_get_temp_dir(), 'photo');
+        $temp_file = \Helper::getTempFileName();
 
         \File::put($temp_file, $image_data);
 
@@ -1384,4 +1423,111 @@ class Customer extends Model
         $meta[$key] = $value;
         $this->meta = $meta;
     }
+
+    public static function getPhoneTypeName($code)
+    {
+        $phone_types = [
+            self::PHONE_TYPE_WORK   => __('Work'),
+            self::PHONE_TYPE_HOME   => __('Home'),
+            self::PHONE_TYPE_OTHER  => __('Other'),
+            self::PHONE_TYPE_MOBILE => __('Mobile'),
+            self::PHONE_TYPE_FAX    => __('Fax'),
+            self::PHONE_TYPE_PAGER  => __('Pager'),
+        ];
+
+        return $phone_types[$code] ?? '';
+    }
+
+    public static function isDefaultPhoneType($code)
+    {
+        return (self::PHONE_TYPE_WORK == $code);
+    }
+
+    // Method does not check if the customer
+    // has conversations.
+    public function deleteCustomer()
+    {
+        // Delete emails.
+        Email::where('customer_id', $this->id)->delete();
+        $this->delete();
+    }
+
+    public function getChannels()
+    {
+        if (!$this->channel || !$this->channel_id) {
+            return collect([]);
+        }
+        return CustomerChannel::where('customer_id', $this->id)->get();
+    }
+
+    public function addChannel($channel, $channel_id)
+    {
+        // We are doing this to let existing modules not to throw error
+        // and as a flag that this customer has record(s) in cucstomer_channel table.
+        if (!$this->channel || !$this->channel_id) {
+            $this->channel = $channel;
+            $this->channel_id = $channel_id;
+            $this->save();
+        }
+
+        return CustomerChannel::create($this->id, $channel, $channel_id);
+    }
+
+    public static function getCustomerByChannel($channel, $channel_id)
+    {
+        $customer_channel = CustomerChannel::where('channel', $channel)
+            ->where('channel_id', $channel_id)
+            ->first();
+
+        if ($customer_channel) {
+            return $customer_channel->customer;
+        } else {
+            return null;
+        }
+    }
+
+    public function getChannelId($channel)
+    {
+        return CustomerChannel::where('customer_id', $this->id)
+            ->where('channel', $channel)
+            ->value('channel_id');
+    }
+
+    public static function findCustomersBySocialProfile($type, $value, $exclude_channel = null)
+    {
+        $value = mb_strtolower($value);
+
+        $like = '%'.$value.'","type":'.$type.'}]';
+        $customers = Customer::where('social_profiles', \Helper::sqlLikeOperator(), $like)->get();
+
+        // Now more prcise filtering.
+        foreach ($customers as $i => $customer) {
+            $ok = false;
+            foreach ($customer->getSocialProfiles() as $social_profile) {
+                if ($social_profile['type'] == $type
+                    // Try to check username written in different ways:
+                    // - username
+                    // - @username
+                    // - https://example.org/username
+                    && preg_match("#(^|/|@)".preg_quote($value)."$#", trim(mb_strtolower($social_profile['value'])))
+                ) {
+                    $ok = true;
+                    break;
+                }
+            }
+            if (!$ok) {
+                $customers->forget($i);
+            }
+        }
+
+        if ($exclude_channel && count($customers)) {
+            $exclude_customer_ids = CustomerChannel::whereIn('customer_id', $customers->pluck('id'))
+                ->where('channel', $exclude_channel)
+                ->pluck('customer_id');
+            return $customers->whereNotIn('customer_id', $exclude_customer_ids);
+        } else {
+            return $customers;
+        }
+    }
 }
+

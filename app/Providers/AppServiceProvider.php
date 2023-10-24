@@ -25,7 +25,10 @@ class AppServiceProvider extends ServiceProvider
         \App\Email::observe(\App\Observers\EmailObserver::class);
         \App\User::observe(\App\Observers\UserObserver::class);
         \App\Conversation::observe(\App\Observers\ConversationObserver::class);
+        \App\Customer::observe(\App\Observers\CustomerObserver::class);
         \App\Thread::observe(\App\Observers\ThreadObserver::class);
+        \App\Attachment::observe(\App\Observers\AttachmentObserver::class);
+        \App\Follower::observe(\App\Observers\FollowerObserver::class);
         \Illuminate\Notifications\DatabaseNotification::observe(\App\Observers\DatabaseNotificationObserver::class);
     }
 
@@ -38,7 +41,7 @@ class AppServiceProvider extends ServiceProvider
     {
         // Forse HTTPS if using CloudFlare "Flexible SSL"
         // https://support.cloudflare.com/hc/en-us/articles/200170416-What-do-the-SSL-options-mean-
-        if (\Config::get('app.force_https') == 'true') {
+        if (\Helper::getProtocol() == 'https') {
             // $_SERVER['HTTPS'] = 'on';
             // $_SERVER['SERVER_PORT'] = '443';
             $this->app['url']->forceScheme('https');

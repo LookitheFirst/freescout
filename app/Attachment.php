@@ -21,6 +21,8 @@ class Attachment extends Model
 
     CONST DISK = 'private';
 
+    CONST MIME_TYPE_MAX_LENGTH = 127;
+
     // https://github.com/Webklex/laravel-imap/blob/master/src/IMAP/Attachment.php
     public static $types = [
         'message'     => self::TYPE_MESSAGE,
@@ -57,14 +59,24 @@ class Attachment extends Model
             return false;
         }
 
+        // Sanitize mime type.
+        // https://github.com/freescout-helpdesk/freescout/issues/3048
+        $mime_duplicate = strpos($mime_type, "application/vnd.openxmlformats", 1);
+        if ($mime_duplicate) {
+            $mime_type = substr($mime_type, $mime_duplicate);
+        }
+        $mime_type = substr($mime_type, 0, self::MIME_TYPE_MAX_LENGTH);
+
         $orig_extension = pathinfo($file_name, PATHINFO_EXTENSION);
 
         // Add underscore to the extension if file has restricted extension.
-        $file_name = \Helper::sanitizeUploadedFileName($file_name);
+        $file_name = \Helper::sanitizeUploadedFileName($file_name, $uploaded_file, $content);
 
         // Replace some symbols in file name.
         // Gmail can not load image if it contains spaces.
-        $file_name = preg_replace('/[ #\/]/', '-', $file_name);
+        $file_name = preg_replace('/[ #\/]/', '_', $file_name);
+        // Replace soft hyphens.
+        $file_name = str_replace(html_entity_decode('&#xAD;'), '_', $file_name);
 
         if (!$file_name) {
             if (!$orig_extension) {
@@ -77,6 +89,17 @@ class Attachment extends Model
             if ($orig_extension) {
                 $file_name .= '.'.$orig_extension;
             }
+        }
+
+        // https://github.com/freescout-helpdesk/freescout/issues/2385
+        // Fix for webklex/php-imap.
+        if ($file_name == 'undefined' && $mime_type == 'message/rfc822') {
+            $file_name = 'RFC822.eml';
+        }
+
+        // https://github.com/freescout-helpdesk/freescout/issues/1412#issuecomment-1658881493
+        if ($file_name == 'undefined' && $mime_type == 'text/calendar') {
+            $file_name = 'calendar.ics';
         }
 
         if (strlen($file_name) > 255) {
@@ -132,6 +155,8 @@ class Attachment extends Model
         } else {
             Storage::disk(self::DISK)->put($file_path, $content);
         }
+
+        \Helper::sanitizeUploadedFileData($file_path, \Helper::getPrivateStorage(), $content);
 
         return [
             'file_dir'  => $file_dir,
@@ -205,7 +230,7 @@ class Attachment extends Model
     }
 
     /**
-     * Conver type name to integer.
+     * Convert type name to integer.
      */
     public static function typeNameToInt($type_name)
     {
@@ -287,6 +312,14 @@ class Attachment extends Model
         } else {
             return DIRECTORY_SEPARATOR.'storage'.DIRECTORY_SEPARATOR.'app'.DIRECTORY_SEPARATOR.self::DIRECTORY.DIRECTORY_SEPARATOR.$this->file_dir.$this->file_name;
         }
+    }
+
+    /**
+     * Check if the attachment file actually exists on the disk.
+     */
+    public function fileExists()
+    {
+        return $this->getDisk()->exists(self::DIRECTORY.DIRECTORY_SEPARATOR.$this->file_dir.$this->file_name);
     }
 
     public static function formatBytes($size, $precision = 0)
@@ -376,10 +409,12 @@ class Attachment extends Model
     /**
      * Create a copy of the attachment and it's file.
      */
-    public function duplicate($thread_id)
+    public function duplicate($thread_id = null)
     {
         $new_attachment = $this->replicate();
-        $new_attachment->thread_id = $thread_id;
+        if ($thread_id) {
+            $new_attachment->thread_id = $thread_id;
+        }
 
         $new_attachment->save();
 

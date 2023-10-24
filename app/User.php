@@ -7,6 +7,7 @@
 namespace App;
 
 use App\Email;
+use App\Follower;
 use App\Mail\PasswordChanged;
 use App\Mail\UserInvite;
 use App\Notifications\WebsiteNotification;
@@ -27,10 +28,13 @@ class User extends Authenticatable
     public $rememberCacheDriver = 'array';
 
     const PHOTO_DIRECTORY = 'users';
-    const PHOTO_SIZE = 50; // px
     const PHOTO_QUALITY = 77;
 
     const EMAIL_MAX_LENGTH = 100;
+
+    const EMAIL_DELETED_SUFFIX = '_deleted';
+
+    const DEFAULT_TIMEZONE = 'UTC';
 
     /**
      * Roles.
@@ -47,7 +51,7 @@ class User extends Authenticatable
      * Types.
      */
     const TYPE_USER = 1;
-    const TYPE_TEAM = 2;
+    const TYPE_ROBOT = 2; // Workflows, teams, etc.
 
     /**
      * Statuses.
@@ -112,7 +116,7 @@ class User extends Authenticatable
      *
      * @var [type]
      */
-    protected $fillable = ['role', 'status', 'first_name', 'last_name', 'email', 'password', 'role', 'timezone', 'photo_url', 'type', 'emails', 'job_title', 'phone', 'time_format', 'enable_kb_shortcuts', 'locale'];
+    protected $fillable = ['role', 'status', 'first_name', 'last_name', 'email', 'password', 'timezone', 'photo_url', 'type', 'emails', 'job_title', 'phone', 'time_format', 'enable_kb_shortcuts', 'locale'];
 
     protected $casts = [
         'permissions' => 'array',
@@ -209,7 +213,7 @@ class User extends Authenticatable
      */
     public function getFullName()
     {
-        return $this->first_name.' '.$this->last_name;
+        return \Eventy::filter('user.full_name', $this->first_name.' '.$this->last_name, $this);
     }
 
     /**
@@ -345,7 +349,26 @@ class User extends Authenticatable
         }
     }
 
+    /**
+     * Main function to check if user has some exta access permission
+     * for a given mailbox.
+     */
     public function hasManageMailboxPermission($mailbox_id, $perm) {
+        // Experimental feature.
+        // This option does not affect admin users.
+        if ($perm == Mailbox::ACCESS_PERM_ASSIGNED) {
+            if ($this->isAdmin()) {
+                return false;
+            } else {
+                $show_only_assigned_conversations = config('app.show_only_assigned_conversations') ?? '';
+                if (in_array($this->id, explode(',', $show_only_assigned_conversations))) {
+                    return true;
+                } else {
+                    return false;
+                }
+            }
+        }
+
         if ($this->isAdmin()) {
             return true;
         } else {
@@ -353,6 +376,8 @@ class User extends Authenticatable
             $mailbox = $this->mailboxesSettings()->where('mailbox_id', $mailbox_id)->first();
             if ($mailbox && !empty($mailbox->access) && in_array($perm, json_decode($mailbox->access))) {
                 return true;
+            } else {
+                return false;
             }
         }
     }
@@ -369,6 +394,21 @@ class User extends Authenticatable
     public static function generateRandomPassword($length = 8)
     {
         return str_random($length);
+    }
+
+    /**
+     * This password indicates that the user has not set the password by himself.
+     */
+    public static function getDummyPassword()
+    {
+        return encrypt('dummy_'.str_random(8));
+    }
+
+    public function isDummyPassword()
+    {
+        $decrypted_password = \Helper::decrypt($this->password);
+        return preg_match("#^dummy_#", $decrypted_password);
+        //return Hash::check($this->getDummyPassword(), $this->password);
     }
 
     /**
@@ -468,6 +508,7 @@ class User extends Authenticatable
                         'H'     => 'h',
                         'G'     => 'g',
                         ':i'    => ':ia',
+                        ':i:s'  => ':i:sa',
                         ':ia:s' => ':i:sa',
                     ]);
                 } else {
@@ -485,7 +526,39 @@ class User extends Authenticatable
                 $date->setTimezone($user->timezone);
             }
         }
-        return $date->format($format);
+
+        if (class_exists('IntlDateFormatter')) {
+
+            // Convert `strftime` format to `IntlDateFormatter` pattern.
+            // https://unicode-org.github.io/icu/userguide/format_parse/datetime/
+            $format = strtr($format, [
+                'M' => 'MMM',
+                'm' => 'MM',
+                'j' => 'd',
+                'd' => 'dd',
+                'H' => 'HH',
+                'h' => 'hh',
+                'i' => 'mm',
+                's' => 'ss',
+                'l' => 'cccc',
+                'O' => 'xx',
+            ]);
+
+            // Remove dot from month name.
+            $formatted = $date->formatLocalized($format);
+            if (!strstr($format, '.')) {
+                $formatted = str_replace('.', '', $formatted);
+            }
+            
+            // AM/PM to am/pm.
+            $formatted = preg_replace_callback('#\d+(AM|PM)$#', function ($m) {
+                return strtolower($m[0] ?? '');
+            }, $formatted);
+
+            return \Helper::mbUcfirst($formatted);
+        } else {
+            return $date->format($format);
+        }
     }
 
     /**
@@ -553,7 +626,7 @@ class User extends Authenticatable
     public static function getUserPermissionName($user_permission)
     {
         $user_permission_names = [
-            self::PERM_DELETE_CONVERSATIONS => __('Users are allowed to delete notes/conversations'),
+            self::PERM_DELETE_CONVERSATIONS => __('Users are allowed to delete conversations'),
             self::PERM_EDIT_CONVERSATIONS   => __('Users are allowed to edit notes/replies'),
             self::PERM_EDIT_SAVED_REPLIES   => __('Users are allowed to edit/delete saved replies'),
             self::PERM_EDIT_TAGS            => __('Users are allowed to manage tags'),
@@ -630,7 +703,7 @@ class User extends Authenticatable
             saveToSendLog($this, SendLog::STATUS_SEND_ERROR);
 
             if ($throw_exceptions) {
-                throw new \Exception(__('Error occured sending email to :email. Please check logs for more details.', ['email' => $this->email]), 1);
+                throw new \Exception(__('Error occurred sending email to :email. Please check logs for more details.', ['email' => $this->email]), 1);
             } else {
                 return false;
             }
@@ -649,9 +722,12 @@ class User extends Authenticatable
     /**
      * Generate and set password.
      */
-    public function setPassword()
+    public function setPassword($password = null)
     {
-        $this->password = Hash::make($this->generateRandomPassword());
+        if ($password === null) {
+            $password = $this->generateRandomPassword();
+        }
+        $this->password = Hash::make($password);
     }
 
     /**
@@ -785,7 +861,9 @@ class User extends Authenticatable
             $real_path = $uploaded_file->getRealPath();
             $mime_type = $uploaded_file->getMimeType();
         }
-        $resized_image = \App\Misc\Helper::resizeImage($real_path, $mime_type, self::PHOTO_SIZE, self::PHOTO_SIZE);
+
+        $photo_size = config('app.user_photo_size');
+        $resized_image = \App\Misc\Helper::resizeImage($real_path, $mime_type, $photo_size, $photo_size);
 
         if (!$resized_image) {
             return false;
@@ -871,7 +949,7 @@ class User extends Authenticatable
      */
     public static function getSuperAdmin()
     {
-        return self::where('role', self::ROLE_ADMIN)->first();
+        return self::nonDeleted()->where('role', self::ROLE_ADMIN)->first();
     }
 
     /**
@@ -885,10 +963,7 @@ class User extends Authenticatable
             return null;
         }
 
-        $user->fill($data);
-
-        $user->password = \Hash::make($data['password']);
-        $user->email = Email::sanitizeEmail($data['email']);
+        $user->setData($data);
 
         try {
             $user->save();
@@ -897,6 +972,36 @@ class User extends Authenticatable
         }
 
         return $user;
+    }
+
+    /**
+     * Set fields.
+     */
+    public function setData($data, $replace_data = true, $save = false)
+    {
+        if (isset($data['email'])) {
+            $data['email'] = Email::sanitizeEmail($data['email']);
+        }
+        if (isset($data['password']) && empty($data['no_password_hashing'])) {
+            $data['password'] = \Hash::make($data['password']);
+        }
+
+        if ($replace_data) {
+            $this->fill($data);
+        } else {
+            // Update empty fields.
+            foreach ($data as $key => $value) {
+                if (in_array($key, $this->fillable) && empty($this->$key)) {
+                    $this->$key = $value;
+                }
+            }
+        }
+
+        \Eventy::action('user.set_data', $this, $data, $replace_data);
+
+        if ($save) {
+            $this->save();
+        }
     }
 
     /**
@@ -941,12 +1046,15 @@ class User extends Authenticatable
 
     /**
      * Get query to fetch non-deleted users.
+     * Some modules may extend this condition, to allow this user $extended parameter.
      *
      * @return [type] [description]
      */
-    public static function nonDeleted()
+    public static function nonDeleted($extended = false)
     {
-        return self::where('status', '!=', self::STATUS_DELETED);
+        $condition = self::where('status', '!=', self::STATUS_DELETED);
+
+        return \Eventy::filter('user.non_deleted_condition', $condition, $extended);
     }
 
     public function isActive()
@@ -1010,12 +1118,12 @@ class User extends Authenticatable
 
     public function getAuthToken()
     {
-        return md5($this->id.config('app.key'));
+        return md5($this->id.''.$this->created_at.config('app.key'));
     }
 
-    public static function findNonDeleted($id)
+    public static function findNonDeleted($id, $extended = false)
     {
-        return User::nonDeleted()->where('id', $id)->first();
+        return User::nonDeleted($extended)->where('id', $id)->first();
     }
 
     /**
@@ -1046,7 +1154,7 @@ class User extends Authenticatable
         if ($this->email == $email) {
             return true;
         }
-        $alt_emails = explode(',', $this->emails);
+        $alt_emails = explode(',', $this->emails ?? '');
         
         foreach ($alt_emails as $alt_email) {
             if (Email::sanitizeEmail($alt_email) == $email) {
@@ -1070,5 +1178,24 @@ class User extends Authenticatable
         } else {
             return false;
         }
+    }
+
+    public function followConversation($conversation_id)
+    {
+        try {
+            $follower = new Follower();
+            $follower->conversation_id = $conversation_id;
+            $follower->user_id = $this->id;
+            $follower->save();
+        } catch (\Exception $e) {
+            // Already exists
+        }
+    }
+
+    // If there will be some issues, extra "robot" field
+    // may need to be added to Users table.
+    public static function getRobotsCondition()
+    {
+        return User::where('type', User::TYPE_ROBOT);
     }
 }

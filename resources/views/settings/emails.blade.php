@@ -6,7 +6,6 @@
         <p>{{ __("These settings are used to send system emails (alerts to admin and invitation emails to users).") }}</p>
 
         <p>
-            {!! __("It is recommended to use :%tag_begin%PHP's mail() function:%tag_end%.", ['%tag_begin%' => '<strong>', '%tag_end%' =>'</strong>']) !!}
             {{ __("If you want to send system emails via webmail providers (Gmail, Yahoo, etc), use only SMTP method and make sure that SMTP username is equal to 'Mail From', otherwise webmail provider won't send emails.") }}
         </p>
     </div>
@@ -44,7 +43,7 @@
 
             <div class="col-sm-6">
                 <input id="mail_host" type="text" class="form-control input-sized" name="settings[mail_host]" value="{{ old('settings.mail_host', $settings['mail_host']) }}" maxlength="255"  @if ($settings['mail_driver'] == \MailHelper::MAIL_DRIVER_SMTP) required @endif autofocus>
-                @if (strstr($settings['mail_host'], '.gmail.'))
+                @if (strstr($settings['mail_host'] ?? '', '.gmail.'))
                     <div class="form-help">
                         {!! __("Make sure to :%link_start%enable less secure apps:%link_end% in your Google account to send emails from Gmail.", ['%link_start%' => '<a href="https://myaccount.google.com/lesssecureapps?pli=1" target="_blank">', '%link_end%' => '</a>']) !!}
                     </div>
@@ -110,19 +109,35 @@
 
     <h3 class="subheader">{{ __('Fetching Emails') }}</h3>
     <div class="form-group{{ $errors->has('settings.fetch_schedule') ? ' has-error' : '' }}">
-        <label for="fetch_schedule" class="col-sm-2 control-label">{{ __('Fetch Mail Schedule') }}</label>
+        <label for="fetch_schedule" class="col-sm-2 control-label">{{ __('Fetching Interval') }}</label>
 
         <div class="col-sm-6">
             <select id="fetch_schedule" class="form-control input-sized" name="settings[fetch_schedule]">
                 <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_MINUTE }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_MINUTE)selected="selected"@endif>{{ __('Every minute') }}</option>
-                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_FIVE_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_FIVE_MINUTES)selected="selected"@endif>{{ __('Every 5 minutes') }}</option>
-                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_TEN_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_TEN_MINUTES)selected="selected"@endif>{{ __('Every 10 minutes') }}</option>
-                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES)selected="selected"@endif>{{ __('Every 15 minutes') }}</option>
-                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_THIRTY_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_THIRTY_MINUTES)selected="selected"@endif>{{ __('Every 30 minutes') }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_TWO_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_TWO_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_TWO_MINUTES]) }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_THREE_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_THREE_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_THREE_MINUTES]) }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_FIVE_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_FIVE_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_FIVE_MINUTES]) }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_TEN_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_TEN_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_TEN_MINUTES]) }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES]) }}</option>
+                <option value="{{ \MailHelper::FETCH_SCHEDULE_EVERY_THIRTY_MINUTES }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_EVERY_THIRTY_MINUTES)selected="selected"@endif>{{ __('Every :number minutes', ['number' => \MailHelper::FETCH_SCHEDULE_EVERY_THIRTY_MINUTES]) }}</option>
                 <option value="{{ \MailHelper::FETCH_SCHEDULE_HOURLY }}" @if (old('settings.fetch_schedule', $settings['fetch_schedule']) == \MailHelper::FETCH_SCHEDULE_HOURLY)selected="selected"@endif>{{ __('Hourly') }}</option>
             </select>
         </div>
     </div>
+
+    {{--<div class="form-group{{ $errors->has('settings[use_mail_date_on_fetching]') ? ' has-error' : '' }}">
+        <label for="use_mail_date_on_fetching" class="col-sm-2 control-label">{{ __('Mail Date & Time') }}</label>
+
+        <div class="col-sm-6">
+            <div class="control-group">
+                <label for="use_mail_date_on_fetching_0" class="radio"><input type="radio" name="settings[use_mail_date_on_fetching]" value="false" id="use_mail_date_on_fetching_0" @if (!$settings['use_mail_date_on_fetching'])checked="checked"@endif> {{ __('Use actual fetching date and time') }}</label>
+
+                <label for="use_mail_date_on_fetching_1" class="radio"><input type="radio" name="settings[use_mail_date_on_fetching]" value="true" id="use_mail_date_on_fetching_1" @if ($settings['use_mail_date_on_fetching'])checked="checked"@endif> {{ __('Use date and time from mail headers') }}</label>
+            </div>
+
+            @include('partials/field_error', ['field'=>'settings.use_mail_date_on_fetching'])
+        </div>
+    </div>--}}
 
     <div class="form-group margin-top">
         <div class="col-sm-6 col-sm-offset-2">

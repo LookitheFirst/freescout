@@ -19,8 +19,10 @@
     <div class="row-container form-container">
         <div class="row">
             <div class="col-xs-12">
-                <form class="form-horizontal margin-top" method="POST" action="">
+                <form class="form-horizontal margin-top" method="POST" action="" enctype="multipart/form-data">
                     {{ csrf_field() }}
+                    
+	                @action('mailbox.update.before_name', $mailbox, $errors)
 
                     <div class="form-group{{ $errors->has('name') ? ' has-error' : '' }}">
                         <label for="name" class="col-sm-2 control-label">{{ __('Mailbox Name') }}</label>
@@ -49,14 +51,20 @@
                     </div>
 
                     @if (Auth::user()->can('updateSettings', $mailbox))
-                        <div class="form-group{{ $errors->has('aliases') ? ' has-error' : '' }}">
+                        <div class="form-group{{ $errors->has('aliases') ? ' has-error' : '' }} margin-bottom-5">
                             <label for="aliases" class="col-sm-2 control-label">{{ __('Aliases') }}</label>
 
                             <div class="col-sm-6">
                                 <div class="flexy">
                                     <input id="aliases" type="text" class="form-control input-sized" name="aliases" value="{{ old('aliases', $mailbox->aliases) }}" maxlength="255">
 
-                                    <i class="glyphicon glyphicon-info-sign icon-info" data-toggle="popover" data-trigger="hover" data-html="true" data-placement="left"  data-content="{{ __('Aliases are other email addresses that also forward to your mailbox address. Separate each email with a comma.') }}"></i>
+                                    <i class="glyphicon glyphicon-info-sign icon-info" data-toggle="popover" data-trigger="hover" data-html="true" data-placement="left"  data-content="{{ __('Aliases are other email addresses that also forward to your mailbox address. Separate each email with a comma.') }}&lt;br&gt;&lt;br&gt;alias1@example.org, alias2@example.org({{ __('Mailbox Name') }}), alias3@exampl.org"></i>
+                                </div>
+
+                                <div class="controls">
+                                    <label for="aliases_reply" class="checkbox inline plain">
+                                        <input type="checkbox" name="aliases_reply" value="1" id="aliases_reply" @if (old('aliases_reply', $mailbox->aliases_reply))checked="checked"@endif> <span class="text-help">{{ __('Allow to reply from aliases') }}</span>
+                                    </label>
                                 </div>
 
                                 @include('partials/field_error', ['field'=>'aliases'])
@@ -109,6 +117,7 @@
 
                             <div class="col-sm-6">
                                 <select id="ticket_status" class="form-control input-sized" name="ticket_status" required autofocus>
+                                    <option value="{{ App\Mailbox::TICKET_STATUS_KEEP_CURRENT }}" @if (old('ticket_status', $mailbox->ticket_status) == App\Mailbox::TICKET_STATUS_KEEP_CURRENT)selected="selected"@endif>{{ __('Keep Current') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_STATUS_ACTIVE }}" @if (old('ticket_status', $mailbox->ticket_status) == App\Mailbox::TICKET_STATUS_ACTIVE)selected="selected"@endif>{{ __('Active') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_STATUS_PENDING }}" @if (old('ticket_status', $mailbox->ticket_status) == App\Mailbox::TICKET_STATUS_PENDING)selected="selected"@endif>{{ __('Pending') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_STATUS_CLOSED }}" @if (old('ticket_status', $mailbox->ticket_status) == App\Mailbox::TICKET_STATUS_CLOSED)selected="selected"@endif>{{ __('Closed') }}</option>
@@ -140,6 +149,7 @@
 
                             <div class="col-sm-6">
                                 <select id="ticket_assignee" class="form-control input-sized" name="ticket_assignee" required autofocus>
+                                    <option value="{{ App\Mailbox::TICKET_ASSIGNEE_KEEP_CURRENT }}" @if (old('ticket_assignee', $mailbox->ticket_assignee) == App\Mailbox::TICKET_ASSIGNEE_KEEP_CURRENT)selected="selected"@endif>{{ __('Keep Current') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_ASSIGNEE_ANYONE }}" @if (old('ticket_assignee', $mailbox->ticket_assignee) == App\Mailbox::TICKET_ASSIGNEE_ANYONE)selected="selected"@endif>{{ __('Anyone') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_ASSIGNEE_REPLYING_UNASSIGNED }}" @if (old('ticket_assignee', $mailbox->ticket_assignee) == App\Mailbox::TICKET_ASSIGNEE_REPLYING_UNASSIGNED)selected="selected"@endif>{{ __('Person Replying (if Unassigned)') }}</option>
                                     <option value="{{ App\Mailbox::TICKET_ASSIGNEE_REPLYING }}" @if (old('ticket_assignee', $mailbox->ticket_assignee) == App\Mailbox::TICKET_ASSIGNEE_REPLYING)selected="selected"@endif>{{ __('Person Replying') }}</option>
@@ -180,7 +190,7 @@
                         </div>
                     @endif
                     
-                    @action('mailboxes.update_after_signature', $mailbox)
+                    @action('mailbox.update.after_signature', $mailbox)
 
                     <div class="form-group">
                         <div class="col-sm-6 col-sm-offset-2">
@@ -201,12 +211,15 @@
 
     <div id="delete_mailbox_modal" class="hidden">
         <div class="text-large">{{ __('Deleting this mailbox will remove all historical data and deactivate related workflows and reports.') }}</div>
-        <div class="text-large margin-top margin-bottom-5">{{ __('Please confirm your password:') }}</div>
-        <div class="row">
-            <div class="col-xs-7">
-                <input type="password" class="form-control delete-mailbox-pass" />
+
+        @if (!Auth::user()->isDummyPassword())
+            <div class="text-large margin-top margin-bottom-5">{{ __('Please confirm your password:') }}</div>
+            <div class="row">
+                <div class="col-xs-7">
+                    <input type="password" class="form-control delete-mailbox-pass" />
+                </div>
             </div>
-        </div>
+        @endif
         <div class="margin-top margin-bottom-5">
             <button class="btn btn-danger button-delete-mailbox" data-loading-text="{{ __('Processing') }}…">{{ __('Delete Mailbox') }}</button>
             <button class="btn btn-link" data-dismiss="modal">{{ __('Cancel') }}</button>

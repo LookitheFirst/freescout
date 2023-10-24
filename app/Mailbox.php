@@ -27,6 +27,7 @@ class Mailbox extends Model
     const TICKET_STATUS_ACTIVE = 1;
     const TICKET_STATUS_PENDING = 2;
     const TICKET_STATUS_CLOSED = 3;
+    const TICKET_STATUS_KEEP_CURRENT = 0;
 
     /**
      * Default Assignee.
@@ -34,6 +35,7 @@ class Mailbox extends Model
     const TICKET_ASSIGNEE_ANYONE = 1;
     const TICKET_ASSIGNEE_REPLYING_UNASSIGNED = 2;
     const TICKET_ASSIGNEE_REPLYING = 3;
+    const TICKET_ASSIGNEE_KEEP_CURRENT = 0;
 
     /**
      * Email Template.
@@ -100,6 +102,7 @@ class Mailbox extends Model
     const ACCESS_PERM_PERMISSIONS  = 'perm';
     const ACCESS_PERM_AUTO_REPLIES = 'auto';
     const ACCESS_PERM_SIGNATURE    = 'sig';
+    const ACCESS_PERM_ASSIGNED     = 'asg';
 
     public static $access_permissions = [
         self::ACCESS_PERM_EDIT,
@@ -137,7 +140,7 @@ class Mailbox extends Model
      *
      * @var [type]
      */
-    protected $fillable = ['name', 'email', 'aliases', 'auto_bcc', 'from_name', 'from_name_custom', 'ticket_status', 'ticket_assignee', 'template', 'before_reply', 'signature', 'out_method', 'out_server', 'out_username', 'out_password', 'out_port', 'out_encryption', 'in_server', 'in_port', 'in_username', 'in_password', 'in_protocol', 'in_encryption', 'in_validate_cert', 'auto_reply_enabled', 'auto_reply_subject', 'auto_reply_message', 'office_hours_enabled', 'ratings', 'ratings_placement', 'ratings_text', 'imap_sent_folder'];
+    protected $fillable = ['name', 'email', 'aliases', 'aliases_reply', 'auto_bcc', 'from_name', 'from_name_custom', 'ticket_status', 'ticket_assignee', 'template', 'before_reply', 'signature', 'out_method', 'out_server', 'out_username', 'out_password', 'out_port', 'out_encryption', 'in_server', 'in_port', 'in_username', 'in_password', 'in_protocol', 'in_encryption', 'in_validate_cert', 'auto_reply_enabled', 'auto_reply_subject', 'auto_reply_message', 'office_hours_enabled', 'ratings', 'ratings_placement', 'ratings_text', 'imap_sent_folder'];
 
     protected static function boot()
     {
@@ -458,10 +461,12 @@ class Mailbox extends Model
             $users = User::sortUsers($users);
         }
 
+        $users = \Eventy::filter('mailbox.users_having_access', $users, $this, $cache, $fields, $sort);
+
         return $users;
     }
 
-    public function usersAssignable($cache = true)
+    public function usersAssignable($cache = true, $exclude_hidden = true)
     {
         // Exclude hidden admins.
         $mailbox_id = $this->id;
@@ -474,11 +479,17 @@ class Mailbox extends Model
             ->remember(\Helper::cacheTime($cache))
             ->get();
 
-        $users = $this->users()->select('users.*')->remember(\Helper::cacheTime($cache))->get()->merge($admins)->unique();
+        $users = $this->users()->select(['users.*', 'mailbox_user.hide'])
+            ->remember(\Helper::cacheTime($cache))
+            ->get()
+            ->merge($admins)
+            ->unique();
 
-        foreach ($users as $i => $user) {
-            if (!empty($user->hide)) {
-                $users->forget($i);
+        if ($exclude_hidden) {
+            foreach ($users as $i => $user) {
+                if (!empty($user->hide)) {
+                    $users->forget($i);
+                }
             }
         }
 
@@ -491,6 +502,8 @@ class Mailbox extends Model
 
         // Sort by full name
         $users = User::sortUsers($users);
+
+        $users = \Eventy::filter('mailbox.users_assignable', $users, $this, $cache);
 
         return $users;
     }
@@ -522,7 +535,10 @@ class Mailbox extends Model
                 $user = User::find($user_id);
             }
         }
-        if ($user && $user->isAdmin()) {
+        $filter = \Eventy::filter('mailbox.user_has_access', -1, $this, $user);
+        if ($filter != -1) {
+            return (bool)$filter;
+        } elseif ($user && $user->isAdmin()) {
             return true;
         } else {
             return (bool) $this->users()->where('users.id', $user_id)->count();
@@ -543,12 +559,21 @@ class Mailbox extends Model
         $name = $this->name;
 
         if ($this->from_name == self::FROM_NAME_CUSTOM && $this->from_name_custom) {
-            $name = $this->from_name_custom;
+            $data = [
+                'mailbox' => $this,
+                'mailbox_from_name' => '', // To avoid recursion.
+                'conversation' => $conversation,
+                'user' => $from_user ?: auth()->user(),
+            ];
+            $name = \MailHelper::replaceMailVars($this->from_name_custom, $data, false, true);
         } elseif ($this->from_name == self::FROM_NAME_USER && $from_user) {
             $name = $from_user->getFullName();
         }
 
-        return [ 'address' => \Eventy::filter( 'mailbox.get_mail_from_address', $this->email, $from_user, $conversation ), 'name' => $name ];
+        return [
+            'address' => \Eventy::filter('mailbox.get_mail_from_address', $this->email, $from_user, $conversation),
+            'name' => \Eventy::filter('mailbox.get_mail_from_name', $name, $from_user, $conversation)
+        ];
     }
 
     /**
@@ -687,9 +712,48 @@ class Mailbox extends Model
         if ($this->aliases) {
             $aliases = explode(',', $this->aliases);
             foreach ($aliases as $alias) {
+                $alias = trim($alias);
+                $alias = preg_replace("#\(.*#", '', $alias);
+
                 $alias = Email::sanitizeEmail($alias);
                 if ($alias) {
                     $emails[] = $alias;
+                }
+            }
+        }
+
+        return $emails;
+    }
+
+    /**
+     * Get mailbox aliases as an associative array.
+     */
+    public function getAliases($include_mailbox_email = true, $check_aliases_reply = false)
+    {
+        if ($check_aliases_reply && !$this->aliases_reply) {
+            return [];
+        }
+
+        if ($include_mailbox_email) {
+            $emails = [$this->email => $this->name];
+        } else {
+            $emails = [];
+        }
+
+        if ($this->aliases) {
+            $aliases = explode(',', $this->aliases);
+            foreach ($aliases as $alias) {
+                $name = '';
+                $alias = trim($alias);
+                preg_match("#[^\(]+\((.*)\)#", $alias, $m);
+                if (!empty($m[1])) {
+                    $name = $m[1];
+                    $alias = preg_replace("#\(.*#", '', $alias);
+                }
+
+                $alias = Email::sanitizeEmail($alias);
+                if ($alias) {
+                    $emails[$alias] = $name;
                 }
             }
         }
@@ -840,6 +904,22 @@ class Mailbox extends Model
         return $route;
     }
 
+    public function getMeta($key, $default = null)
+    {
+        if (isset($this->meta[$key])) {
+            return $this->meta[$key];
+        } else {
+            return $default;
+        }
+    }
+
+    public function setMeta($key, $value)
+    {
+        $meta = $this->meta;
+        $meta[$key] = $value;
+        $this->meta = $meta;
+    }
+
     public function setMetaParam($param, $value, $save = false)
     {
         $meta = $this->meta;
@@ -887,5 +967,12 @@ class Mailbox extends Model
     public function oauthGetParam($param)
     {
         return $this->meta['oauth'][$param] ?? '';
+    }
+
+    public function setEmailAttribute($value)
+    {
+        if ($value) {
+            $this->attributes['email'] = Email::sanitizeEmail($value);
+        }
     }
 }

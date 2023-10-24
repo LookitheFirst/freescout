@@ -7,6 +7,11 @@
 namespace App\Misc;
 
 use Carbon\Carbon;
+use App\Option;
+use App\User;
+use App\CustomerChannel;
+use Illuminate\Support\Facades\Storage;
+use Symfony\Component\Console\Output\BufferedOutput;
 
 class Helper
 {
@@ -26,9 +31,26 @@ class Helper
     const QUEUE_DEFAULT = 'default';
 
     /**
+     * Limit for IN queries.
+     */
+    const IN_LIMIT = 1000;
+
+    /**
+     * Permissions for directories.
+     */
+    const DIR_PERMISSIONS = 0755;
+
+    public static $csp_nonce = null;
+
+    /**
      * Stores list of global entities (for caching).
      */
     public static $global_entities = [];
+
+    /**
+     * Flat allowing not to include datepicker JS and CSS twice.
+     */
+    public static $datepicker_included = false;
 
     /**
      * Files with such extensions are being renamed on upload.
@@ -148,6 +170,9 @@ class Helper
         ],
         'ar-BH' => ['name'          => 'العربية',
                     'name_en'       => 'Arabic (Bahrain)',
+        ],
+        'az' => ['name'          => 'Azerbaijani',
+                    'name_en'       => 'Azerbaijani',
         ],
         'eu' => ['name'          => 'Euskara',
                  'name_en'       => 'Basque',
@@ -526,6 +551,11 @@ class Helper
      */
     public static function textPreview($text, $length = self::PREVIEW_MAXLENGTH)
     {
+        $text = strtr($text ?? '', [
+            '</div>' => ' </div>',
+            '</p>' => ' </p>'
+        ]);
+
         $text = self::stripTags($text);
 
         $text = mb_substr($text, 0, $length);
@@ -709,6 +739,11 @@ class Helper
         return \Storage::disk('private');
     }
 
+    public static function getPublicStorage()
+    {
+        return \Storage::disk('public');
+    }
+
     public static function formatException($e)
     {
         return 'Error: '.$e->getMessage().'; File: '.$e->getFile().' ('.$e->getLine().')';
@@ -738,10 +773,15 @@ class Helper
     {
         $client = new \GuzzleHttp\Client();
 
-        $client->request('GET', $url, [
-            'sink' => $destinationFilePath,
-            'connect_timeout' => 7,
-        ]);
+        try {
+            $client->request('GET', $url, \Helper::setGuzzleDefaultOptions([
+                'sink' => $destinationFilePath,
+                'timeout' => 300, // seconds
+                'connect_timeout' => 7,
+            ]));
+        } catch (\Exception $e) {
+            self::logException($e);
+        }
     }
 
     /**
@@ -941,7 +981,12 @@ class Helper
 
         // User may add an extra translation to the app on Translate page,
         // we should allow user to see his custom translations.
-        $custom_locales = \Helper::getCustomLocales();
+        $custom_locales = [];
+        try {
+            $custom_locales = \Helper::getCustomLocales();
+        } catch (\Exception $e) {
+            // During installation it throws an error as there is no tables yet.
+        }
 
         if (count($custom_locales)) {
             $app_locales = array_unique(array_merge($app_locales, $custom_locales));
@@ -1120,9 +1165,17 @@ class Helper
     /**
      * Stop all queue:work processes.
      */
-    public static function queueWorkRestart()
+    public static function queueWorkerRestart()
     {
         \Cache::forever('illuminate:queue:restart', Carbon::now()->getTimestamp());
+        // In some systems queue:work runs on a separate file system,
+        // so those queue:work processes may not get illuminate:queue:restart.
+        $job_exists = \App\Job::where('queue', 'default')
+            ->where('payload', 'like', '{"displayName":"App\\\\\\\\Jobs\\\\\\\\RestartQueueWorker"%')
+            ->exists();
+        if (!$job_exists) {
+            \App\Jobs\RestartQueueWorker::dispatch()->onQueue('default');
+        }
     }
 
     /**
@@ -1187,45 +1240,46 @@ class Helper
     }
 
     /**
+     * It looks like this is not used anywhere.
      * Json encode to avoid "Unable to JSON encode payload. Error code: 5"
      */
-    public static function jsonEncodeSafe($value, $options = 0, $depth = 512, $utfErrorFlag = false)
-    {
-        $encoded = json_encode($value, $options, $depth);
-        switch (json_last_error()) {
-            case JSON_ERROR_NONE:
-                return $encoded;
-            // case JSON_ERROR_DEPTH:
-            //     return 'Maximum stack depth exceeded'; // or trigger_error() or throw new Exception()
-            // case JSON_ERROR_STATE_MISMATCH:
-            //     return 'Underflow or the modes mismatch'; // or trigger_error() or throw new Exception()
-            // case JSON_ERROR_CTRL_CHAR:
-            //     return 'Unexpected control character found';
-            // case JSON_ERROR_SYNTAX:
-            //     return 'Syntax error, malformed JSON'; // or trigger_error() or throw new Exception()
-            case JSON_ERROR_UTF8:
-                $clean = self::utf8ize($value);
-                if ($utfErrorFlag) {
-                    //return 'UTF8 encoding error'; // or trigger_error() or throw new Exception()
-                }
-                return self::jsonEncodeSafe($clean, $options, $depth, true);
-            // default:
-            //     return 'Unknown error'; // or trigger_error() or throw new Exception()
+    // public static function jsonEncodeSafe($value, $options = 0, $depth = 512, $utfErrorFlag = false)
+    // {
+    //     $encoded = json_encode($value, $options, $depth);
+    //     switch (json_last_error()) {
+    //         case JSON_ERROR_NONE:
+    //             return $encoded;
+    //         // case JSON_ERROR_DEPTH:
+    //         //     return 'Maximum stack depth exceeded'; // or trigger_error() or throw new Exception()
+    //         // case JSON_ERROR_STATE_MISMATCH:
+    //         //     return 'Underflow or the modes mismatch'; // or trigger_error() or throw new Exception()
+    //         // case JSON_ERROR_CTRL_CHAR:
+    //         //     return 'Unexpected control character found';
+    //         // case JSON_ERROR_SYNTAX:
+    //         //     return 'Syntax error, malformed JSON'; // or trigger_error() or throw new Exception()
+    //         case JSON_ERROR_UTF8:
+    //             $clean = self::utf8ize($value);
+    //             if ($utfErrorFlag) {
+    //                 //return 'UTF8 encoding error'; // or trigger_error() or throw new Exception()
+    //             }
+    //             return self::jsonEncodeSafe($clean, $options, $depth, true);
+    //         // default:
+    //         //     return 'Unknown error'; // or trigger_error() or throw new Exception()
 
-        }
-    }
+    //     }
+    // }
 
-    public static function utf8ize($mixed)
-    {
-        if (is_array($mixed)) {
-            foreach ($mixed as $key => $value) {
-                $mixed[$key] = self::utf8ize($value);
-            }
-        } else if (is_string ($mixed)) {
-            return utf8_encode($mixed);
-        }
-        return $mixed;
-    }
+    // public static function utf8ize($mixed)
+    // {
+    //     if (is_array($mixed)) {
+    //         foreach ($mixed as $key => $value) {
+    //             $mixed[$key] = self::utf8ize($value);
+    //         }
+    //     } else if (is_string ($mixed)) {
+    //         return utf8_encode($mixed);
+    //     }
+    //     return $mixed;
+    // }
 
     /**
      * Check if host is available on the port specified.
@@ -1249,9 +1303,11 @@ class Helper
 
         $html = \Purifier::clean($html);
 
+        // It's not clear why it was needed to remove spaces after tags.
+        // 
         // Remove all kinds of spaces after tags
         // https://stackoverflow.com/questions/3230623/filter-all-types-of-whitespace-in-php
-        $html = preg_replace("/^(.*)>[\r\n]*\s+/mu", '$1>', $html);
+        //$html = preg_replace("/^(.*)>[\r\n]*\s+/mu", '$1>', $html);
 
         return $html;
     }
@@ -1285,20 +1341,34 @@ class Helper
         $links = array();
 
         // Extract existing links and tags
-        $value = preg_replace_callback('~(<a .*?>.*?</a>|<.*?>)~i', function ($match) use (&$links) { return '<' . array_push($links, $match[1]) . '>'; }, $value);
+        $value = preg_replace_callback('~(<a .*?>.*?</a>|<.*?>)~i', function ($match) use (&$links) { return '<' . array_push($links, $match[1]) . '>'; }, $value ?? '') ?: $value;
+
+        $value = $value ?? '';
 
         // Extract text links for each protocol
         foreach ((array)$protocols as $protocol) {
             switch ($protocol) {
                 case 'http':
-                case 'https':   $value = preg_replace_callback('~(?:(https?)://([^\s<]+)|(www\.[^\s<]+?\.[^\s<]+))(?<![\.,:])~i', function ($match) use ($protocol, &$links, $attr) { if ($match[1]) $protocol = $match[1]; $link = $match[2] ?: $match[3]; return '<' . array_push($links, "<a $attr href=\"$protocol://$link\">$protocol://$link</a>") . '>'; }, $value); break;
-                case 'mail':    $value = preg_replace_callback('~([^\s<>]+?@[^\s<]+?\.[^\s<]+)(?<![\.,:])~', function ($match) use (&$links, $attr) { return '<' . array_push($links, "<a $attr href=\"mailto:{$match[1]}\">{$match[1]}</a>") . '>'; }, $value); break;
-                default:        $value = preg_replace_callback('~' . preg_quote($protocol, '~') . '://([^\s<]+?)(?<![\.,:])~i', function ($match) use ($protocol, &$links, $attr) { return '<' . array_push($links, "<a $attr href=\"$protocol://{$match[1]}\">$protocol://{$match[1]}</a>") . '>'; }, $value); break;
+                case 'https':
+                    //$value = preg_replace_callback('~(?:(https?)://([^\s<]+)|(www\.[^\s<]+?\.[^\s<]+))(?<![\.,:])~i', function ($match) use ($protocol, &$links, $attr) { 
+                    $value = preg_replace_callback('%(\b(([\w-]+)://?|www[.])[^\s()<>]+(?:\([\w\d]+\)|([^[:punct:]\s]|/)))%s', function ($match) use ($protocol, &$links, $attr) { 
+                            if ($match[3]) {
+                                $protocol = $match[3];
+                            }
+                            $link = $match[1];
+                            $link = substr($link, strlen($match[2]));
+                            return '<' . array_push($links, "<a $attr href=\"$protocol://$link\">$protocol://$link</a>") . '>';
+                    }, $value) ?: $value;
+                    break;
+                case 'mail':    $value = preg_replace_callback('~([^\s<>]+?@[^\s<]+?\.[^\s<]+)(?<![\.,:\)])~', function ($match) use (&$links, $attr) { return '<' . array_push($links, "<a $attr href=\"mailto:{$match[1]}\">{$match[1]}</a>") . '>'; }, $value) ?: $value;
+                    break;
+                default:        $value = preg_replace_callback('~' . preg_quote($protocol, '~') . '://([^\s<]+?)(?<![\.,:])~i', function ($match) use ($protocol, &$links, $attr) { return '<' . array_push($links, "<a $attr href=\"$protocol://{$match[1]}\">$protocol://{$match[1]}</a>") . '>'; }, $value) ?: $value;
+                    break;
             }
         }
 
         // Insert all link
-        return preg_replace_callback('/<(\d+)>/', function ($match) use (&$links) { return $links[$match[1] - 1]; }, $value);
+        return preg_replace_callback('/<(\d+)>/', function ($match) use (&$links) { return $links[$match[1] - 1]; }, $value ?? '') ?: $value;
     }
 
     /**
@@ -1322,12 +1392,43 @@ class Helper
     /**
      * Get identifier for queue:work
      */
-    public static function getWorkerIdentifier()
+    public static function getWorkerIdentifier($salt = '')
     {
-        return md5(config('app.key') ?? '');
+        return md5((config('app.key') ?? '').$salt);
     }
 
-    public static function uploadFile($file, $allowed_exts = [], $allowed_mimes = [], $sanitize_file_name = true)
+    /**
+     * Get pids of the specified processes.
+     */
+    public static function getRunningProcesses($search = '')
+    {
+        if (empty($search)) {
+            $search = \Helper::getWorkerIdentifier();
+        }
+
+        $pids = [];
+
+        try {
+            $processes = preg_split("/[\r\n]/", shell_exec("ps aux | grep '".$search."'"));
+            foreach ($processes as $process) {
+                $process = trim($process);
+                preg_match("/^[\S]+\s+([\d]+)\s+/", $process, $m);
+                if (empty($m)) {
+                    // Another format (used in Docker image).
+                    // 1713 nginx     0:00 /usr/bin/php82...
+                    preg_match("/^([\d]+)\s+[\S]+\s+/", $process, $m);
+                }
+                if (!preg_match("/(sh \-c|grep )/", $process) && !empty($m[1])) {
+                    $pids[] = $m[1];
+                }
+            }
+        } catch (\Exception $e) {
+            // Do nothing
+        }
+        return $pids;
+    }
+
+    public static function uploadFile($file, $allowed_exts = [], $allowed_mimes = [])
     {
         $ext = strtolower($file->getClientOriginalExtension());
 
@@ -1345,13 +1446,36 @@ class Helper
         }
         $file_name = \Str::random(25).'.'.$ext;
 
-        if ($sanitize_file_name) {
-            $file_name = \Helper::sanitizeUploadedFileName($file_name);
-        }
+        $file_name = \Helper::sanitizeUploadedFileName($file_name, $file);
 
         $file->storeAs('uploads', $file_name);
 
+        self::sanitizeUploadedFileData('uploads'.DIRECTORY_SEPARATOR.$file_name, self::getPublicStorage());
+
         return self::uploadedFilePath($file_name);
+    }
+
+    public static function sanitizeUploadedFileData($file_path, $storage, $content = null)
+    {
+        // Remove <script>, href="", iframe, etc from SVG files.
+        // Any image can be interpreted as SVG by browser,
+        // so checking extension is not enough.
+        if ($storage->exists($file_path)
+            && ($storage->mimeType($file_path) == 'image/svg+xml' 
+                || strtolower(pathinfo($file_path, PATHINFO_EXTENSION)) == 'svg')
+        ) {
+            if (!$content) {
+                $content = $storage->get($file_path);
+            }
+            if ($content) {
+                $svg_sanitizer = new \enshrined\svgSanitize\Sanitizer();
+                $clean_content = $svg_sanitizer->sanitize($content);
+                if (!$clean_content)  {
+                    $clean_content = preg_replace('#<script(.*?)>(.*?)</script>#is', '', $content);
+                }
+                $storage->put($file_path, $clean_content);
+            }
+        }
     }
 
     public static function uploadedFileRemove($name)
@@ -1408,6 +1532,11 @@ class Helper
         return \DB::connection()->getPDO()->getAttribute(\PDO::ATTR_DRIVER_NAME) == 'pgsql';
     }
 
+    public static function sqlLikeOperator()
+    {
+        return self::isPgSql() ? 'ilike' : 'like';
+    }
+
     public static function humanFileSize($size, $unit="")
     {
         if ((!$unit && $size >= 1<<30) || $unit == "GB") {
@@ -1457,19 +1586,13 @@ class Helper
     public static function downloadRemoteFileAsTmp($uri)
     {
         try {
-            $headers = get_headers($uri);
-
-            if (!preg_match("/200/", $headers[0])) {
-                return false;
-            }
-
-            $contents = file_get_contents($uri);
+            $contents = self::getRemoteFileContents($uri);
 
             if (!$contents) {
                 return false;
             }
 
-            $temp_file = tempnam(sys_get_temp_dir(), 'fs');
+            $temp_file = self::getTempFileName();
 
             \File::put($temp_file, $contents);
 
@@ -1483,6 +1606,62 @@ class Helper
         }
     }
 
+    // Replacement for file_get_contents() as some hostings 
+    // do not allow reading remote files via allow_url_fopen option.
+    public static function getRemoteFileContents($url)
+    {
+        try {
+            $headers = get_headers($url);
+
+            // 307 - Temporary Redirect.
+            if (!preg_match("/(200|301|302|307)/", $headers[0])) {
+                return false;
+            }
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+            curl_setopt($ch, CURLOPT_URL, $url);
+            \Helper::setCurlDefaultOptions($ch);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 180);
+            $contents = curl_exec($ch);
+
+            if (curl_errno($ch)) {
+                throw new \Exception(curl_errno($ch).' '.curl_error($ch), 1);
+            }
+
+            curl_close($ch);
+
+            if (!$contents) {
+                return false;
+            }
+
+            return $contents;
+
+        } catch (\Exception $e) {
+
+            \Helper::logException($e, 'Error downloading a remote file ('.$url.'): ');
+
+            return false;
+        }
+    }
+
+    public static function getTempDir()
+    {
+        return sys_get_temp_dir() ?: '/tmp';
+    }
+
+    public static function getTempFileName()
+    {
+        return tempnam(self::getTempDir(), self::getTempFilePrefix());
+    }
+
+    public static function getTempFilePrefix()
+    {
+        return 'fs-'.substr(md5(config('app.key').'temp_prefix'), 0, 8).'_';
+    }
+
+    // Keep in mind that $uploaded_file->getClientMimeType() returns
+    // incorrect mime type for images: application/octet-stream
     public static function downloadRemoteFileAsTmpFile($uri)
     {
         $file_path = self::downloadRemoteFileAsTmp($uri);
@@ -1496,14 +1675,53 @@ class Helper
         }
     }
 
-    public static function sanitizeUploadedFileName($file_name)
+    public static function sanitizeUploadedFileName($file_name, $uploaded_file = null, $contents = null)
     {
         // Check extension.
-        $extension = pathinfo($file_name, PATHINFO_EXTENSION);
-        if (preg_match('/('.implode('|', self::$restricted_extensions).')/', strtolower($extension))) {
+        $ext = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+        if (preg_match('/('.implode('|', self::$restricted_extensions).')/', $ext)) {
             // Add underscore to the extension if file has restricted extension.
             $file_name = $file_name.'_';
+        } elseif ($ext == 'pdf') {
+            // Rename PDF to avoid running embedded JavaScript.
+            if ($uploaded_file && !$contents) {
+                $contents = file_get_contents($uploaded_file->getRealPath());
+            }
+            if ($contents && strstr($contents, '/JavaScript')) {
+                $file_name = $file_name.'_';
+            }
         }
+
+        // Remove illegal chars.
+        $illegal_chars = [
+            // Unix.
+                '/',
+                chr(0),
+            // Windows.
+                '<',
+                '>',
+                ':',
+                '"',
+                '/',
+                '\\',
+                '|',
+                '?',
+                '*',
+            // Macos.
+                ':',
+        ];
+        // 0-31 (ASCII control characters) for Windows.
+        for ($i = 0; $i < 32; $i++) {
+            $illegal_chars[] = chr($i);
+        }
+
+        $escaped_regex = preg_quote(implode('', $illegal_chars), '/');
+
+        // https://github.com/freescout-helpdesk/freescout/issues/3377
+        $file_name = mb_convert_encoding($file_name, 'UTF-8', 'UTF-8');
+        $file_name = preg_replace('/[' . $escaped_regex . ']/', '_', $file_name);
+        $file_name = preg_replace("/[\t\r\n]/", '', $file_name);
 
         return $file_name;
     }
@@ -1540,13 +1758,23 @@ class Helper
         return md5(config('app.key').'web_cron_hash');
     }
 
+    public static function getProtocol($url = '')
+    {
+        return mb_strtolower(parse_url($url ?: config('app.url'), PHP_URL_SCHEME) ?: 'http');
+    }
+
+    public static function isHttps($url = '')
+    {
+        return self::getProtocol($url) == 'https';
+    }
+
     public static function fixProtocol($url)
     {
-        if (parse_url(config('app.url'), PHP_URL_SCHEME) == 'http' && parse_url($url, PHP_URL_SCHEME) != 'http') {
+        if (self::getProtocol() == 'http' && parse_url($url, PHP_URL_SCHEME) != 'http') {
             return str_replace('https://', 'http://', $url);
         }
 
-        if (parse_url(config('app.url'), PHP_URL_SCHEME) == 'https' && parse_url($url, PHP_URL_SCHEME) != 'https') {
+        if (self::getProtocol() == 'https' && parse_url($url, PHP_URL_SCHEME) != 'https') {
             return str_replace('http://', 'https://', $url);
         }
 
@@ -1556,7 +1784,7 @@ class Helper
     /**
      * Fix and parse date to Carbon.
      */
-    public static function parseDateToCarbon($date)
+    public static function parseDateToCarbon($date, $current_if_invalid = true)
     {
         if (preg_match('/\+0580/', $date)) {
             $date = str_replace('+0580', '+0530', $date);
@@ -1584,7 +1812,11 @@ class Helper
             try {
                 return Carbon::parse($date);
             } catch (\Exception $_e) {
-                return Carbon::now();
+                if ($current_if_invalid) {
+                    return Carbon::now();
+                } else {
+                    return null;
+                }
             }
         }
 
@@ -1616,6 +1848,215 @@ class Helper
 
     public static function isLocaleRtl(): bool
     {
-        return in_array(app()->getLocale(), config("app.locales_rtl"));
+        return in_array(app()->getLocale(), config("app.locales_rtl") ?? []);
+    }
+
+    public static function phoneToNumeric($phone)
+    {
+        $phone = preg_replace("/[^0-9]/", '', $phone);
+        return (string)$phone;
+    }
+
+    public static function checkRequiredExtensions()
+    {
+        $php_extensions = [];
+        $required_extensions = \Config::get('installer.requirements.php');
+
+        // Optional.
+        $required_extensions[] = 'intl';
+
+        foreach ($required_extensions as $extension_name) {
+            $alternatives = explode('/', $extension_name);
+            if ($alternatives) {
+                foreach ($alternatives as $alternative) {
+                    $php_extensions[$extension_name] = extension_loaded(trim($alternative));
+                    if ($php_extensions[$extension_name]) {
+                        break;
+                    }
+                }
+            } else {
+                $php_extensions[$extension_name] = extension_loaded($extension_name);
+            }
+        }
+
+        // Required in console.
+        if (self::isConsole() || !function_exists('shell_exec')) {
+            $pcntl_enabled = extension_loaded('pcntl');
+        } else {
+            $pcntl_enabled = preg_match("/enable/m", shell_exec("php -i | grep pcntl") ?? '');
+        }
+        $php_extensions['pcntl (console PHP)'] = $pcntl_enabled;
+
+        return $php_extensions;
+    }
+
+    public static function checkRequiredFunctions()
+    {
+        return [
+            'shell_exec (PHP)' => function_exists('shell_exec'),
+            'proc_open (PHP)'  => function_exists('proc_open'),
+            'fpassthru (PHP)'  => function_exists('fpassthru'),
+            'symlink (PHP)'    => function_exists('symlink'),
+            'ps (shell)' => function_exists('shell_exec') ? shell_exec('ps') : false,
+        ];
+    }
+
+    public static function isInstalled()
+    {
+        return file_exists(storage_path().DIRECTORY_SEPARATOR.'.installed');
+    }
+
+    public static function isConsole()
+    {
+        return app()->runningInConsole();
+    }
+
+    /**
+     * Show a warning when background jobs sending emails
+     * are not processed for some time.
+     * https://github.com/freescout-helpdesk/freescout/issues/2808
+     */
+    public static function maybeShowSendingProblemsAlert()
+    {
+        $flashes = [];
+
+        if (\Option::get('send_emails_problem')) {
+            $flashes[] = [
+                'type'      => 'warning',
+                'text'      =>  __('There is a problem processing outgoing mail queue — an admin should check :%a_begin%System Status:%a_end% and :%a_begin_recommendations%Recommendations:%a_end%', ['%a_begin%' => '<a href="'.route('system').'#cron" target="_blank">', '%a_end%' => '</a>', /*'%a_begin_logs%' => '<a href="'.route('logs', ['name' => 'send_errors']).'#cron" target="_blank">',*/ '%a_begin_recommendations%' => '<a href="https://github.com/freescout-helpdesk/freescout/wiki/Background-Jobs" target="_blank">']),
+                'unescaped' => true,
+            ];
+        }
+
+        return $flashes;
+    }
+
+    public static function mbUcfirst($string, $encoding = 'UTF-8')
+    {
+        $first_char = mb_substr($string, 0, 1, $encoding);
+        $then = mb_substr($string, 1, null, $encoding);
+        return mb_strtoupper($first_char, $encoding) . $then;
+    }
+
+    /**
+     * This is needed to allow using regexes for large texts.
+     */
+    public static function setPcreBacktrackLimit()
+    {
+        if ((int)ini_get('pcre.backtrack_limit') <= 1000000) {
+            ini_set('pcre.backtrack_limit', 1000000000);
+        }
+    }
+
+    /**
+     * Get client IP address.
+     */
+    public static function getClientIp()
+    {
+        // Fix for CloudFlare: https://laracasts.com/discuss/channels/laravel/cloudflare-and-user-ip
+        // But if CloudFlare is not used any value can be set to "Cf-Connecting-Ip" header.
+        // if (isset($_SERVER["HTTP_CF_CONNECTING_IP"])) {
+        //     $_SERVER['REMOTE_ADDR'] = $_SERVER["HTTP_CF_CONNECTING_IP"];
+        // }
+        return request()->ip();
+    }
+
+    public static function getTimeFormat()
+    {
+        $user = auth()->user();
+
+        if ($user) {
+            return $user->time_format;
+        } else {
+            return Option::get('time_format', User::TIME_FORMAT_24);
+        }
+    }
+
+    public static function isTimeFormat24()
+    {
+        return self::getTimeFormat() == User::TIME_FORMAT_24;
+    }
+
+    /**
+     * Runs artisan command and returns it's output.
+     */
+    public static function runCommand($command, $options = [])
+    {
+        $output_buffer = new BufferedOutput();
+        \Artisan::call($command, $options, $output_buffer);
+        
+        return $output_buffer->fetch();
+    }
+
+    public static function setCurlDefaultOptions($ch)
+    {
+        // Curl has default CURLOPT_CONNECTTIMEOUT=30 seconds.
+        curl_setopt($ch, CURLOPT_TIMEOUT, config('app.curl_timeout'));
+        curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, config('app.curl_connect_timeout'));
+        curl_setopt($ch, CURLOPT_PROXY, config('app.proxy'));        
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, config('app.curl_ssl_verifypeer'));        
+    }
+
+    public static function setGuzzleDefaultOptions($params)
+    {
+        $default_params = [
+            'timeout' => config('app.curl_timeout'),
+            'connect_timeout' => config('app.curl_connect_timeout'),
+            'proxy'  => config('app.proxy'),
+            // https://docs.guzzlephp.org/en/6.5/request-options.html#verify
+            'verify' => config('app.curl_ssl_verifypeer'),
+        ];
+
+        return array_merge($default_params, $params);
+    }
+
+    public static function cspNonce()
+    {
+        if (self::$csp_nonce === null) {
+            self::$csp_nonce = \Str::random(25);
+        }
+
+        return self::$csp_nonce;
+    }
+
+    public static function cspMetaTag()
+    {
+        if (!config('app.csp_enabled')) {
+            return '';
+        }
+
+        $nonce = \Helper::cspNonce();
+
+        return "<meta http-equiv=\"Content-Security-Policy\" content=\"script-src 'self' 'nonce-".$nonce."' "
+            .config('app.csp_script_src').' '.\Eventy::filter('csp.script_src', '')."\">";
+        //<meta property=\"csp-nonce\" id=\"csp-nonce\" content=\"".$nonce."\">";
+    }
+
+    public static function cspNonceAttr()
+    {
+        if (!config('app.csp_enabled')) {
+            return '';
+        }
+
+        return ' nonce="'.\Helper::cspNonce().'"';
+    }
+
+    public static function isChatModeAvailable()
+    {
+        return count(CustomerChannel::getChannels());
+    }
+
+    public static function isChatMode()
+    {
+        return (int)\Session::get('chat_mode', 0);
+    }
+
+    public static function setChatMode($is_on)
+    {
+        if ((int)$is_on) {
+            \Session::put('chat_mode', 1);
+        } else {
+            \Session::forget('chat_mode');
+        }
     }
 }

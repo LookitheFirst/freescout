@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Option;
 use App\User;
+use App\FailedJob;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Symfony\Component\Console\Output\BufferedOutput;
@@ -29,28 +30,11 @@ class SystemController extends Controller
      */
     public function status(Request $request)
     {
-        // PHP extensions
-        $php_extensions = [];
-        foreach (\Config::get('app.required_extensions') as $extension_name) {
-            $alternatives = explode('/', $extension_name);
-            if ($alternatives) {
-                foreach ($alternatives as $alternative) {
-                    $php_extensions[$extension_name] = extension_loaded(trim($alternative));
-                    if ($php_extensions[$extension_name]) {
-                        break;
-                    }
-                }
-            } else {
-                $php_extensions[$extension_name] = extension_loaded($extension_name);
-            }
-        }
+        // PHP extensions.
+        $php_extensions = \Helper::checkRequiredExtensions();
 
         // Functions.
-        $functions = [
-            'shell_exec (PHP)' => function_exists('shell_exec'),
-            'proc_open (PHP)' => function_exists('proc_open'),
-            'ps (shell)' => function_exists('shell_exec') ? shell_exec('ps') : false,
-        ];
+        $functions = \Helper::checkRequiredFunctions();
 
         // Permissions.
         $permissions = [];
@@ -71,6 +55,8 @@ class SystemController extends Controller
         if (function_exists('shell_exec')) {
             $non_writable_cache_file = shell_exec('find '.base_path('storage/framework/cache/data/').' -type f | xargs -I {} sh -c \'[ ! -w "{}" ] && echo {}\' 2>&1 | head -n 1');
             $non_writable_cache_file = trim($non_writable_cache_file ?? '');
+            // Leave only one line (in case head -n 1 does not work)
+            $non_writable_cache_file = preg_replace("#[\r\n].+#m", '', $non_writable_cache_file);
             if (!strstr($non_writable_cache_file, base_path('storage/framework/cache/data/'))) {
                 $non_writable_cache_file = '';
             }
@@ -114,7 +100,13 @@ class SystemController extends Controller
                     $processes = preg_split("/[\r\n]/", shell_exec("ps aux | grep '{$command_identifier}'"));
                     $pids = [];
                     foreach ($processes as $process) {
+                        $process = trim($process);
                         preg_match("/^[\S]+\s+([\d]+)\s+/", $process, $m);
+                        if (empty($m)) {
+                            // Another format (used in Docker image).
+                            // 1713 nginx     0:00 /usr/bin/php82...
+                            preg_match("/^([\d]+)\s+[\S]+\s+/", $process, $m);
+                        }
                         if (!preg_match("/(sh \-c|grep )/", $process) && !empty($m[1])) {
                             $running_commands++;
                             $pids[] = $m[1];
@@ -133,7 +125,7 @@ class SystemController extends Controller
                 } elseif ($running_commands > 1) {
                     // queue:work command is stopped by settings a cache key
                     if ($command_name == 'queue:work') {
-                        \Helper::queueWorkRestart();
+                        \Helper::queueWorkerRestart();
                         $commands[] = [
                             'name'        => $command_name,
                             'status'      => 'error',
@@ -208,6 +200,11 @@ class SystemController extends Controller
             $latest_version = \Config::get('app.version');
         }
 
+        // Detect missing migrations.
+        $migrations_output = \Helper::runCommand('migrate:status');
+        preg_match_all("#\| N    \| ([^\|]+)\|#", $migrations_output, $migrations_m);
+        $missing_migrations = $migrations_m[1] ?? [];
+
         return view('system/status', [
             'commands'              => $commands,
             'queued_jobs'           => $queued_jobs,
@@ -222,6 +219,8 @@ class SystemController extends Controller
             'public_symlink_exists' => $public_symlink_exists,
             'env_is_writable'       => $env_is_writable,
             'non_writable_cache_file' => $non_writable_cache_file,
+            'missing_migrations'    => $missing_migrations,
+            'invalid_symlinks'      => \App\Module::checkSymlinks(),
         ]);
     }
 
@@ -230,6 +229,12 @@ class SystemController extends Controller
         switch ($request->action) {
             case 'cancel_job':
                 \App\Job::where('id', $request->job_id)->delete();
+                \Session::flash('flash_success_floating', __('Done'));
+                break;
+
+            case 'retry_job':
+                \App\Job::where('id', $request->job_id)->update(['available_at' => time()]);
+                sleep(1);
                 \Session::flash('flash_success_floating', __('Done'));
                 break;
 
@@ -326,7 +331,7 @@ class SystemController extends Controller
 
                     // Artisan::output()
                 } catch (\Exception $e) {
-                    $response['msg'] = __('Error occured. Please try again or try another :%a_start%update method:%a_end%', ['%a_start%' => '<a href="'.config('app.freescout_url').'/docs/update/" target="_blank">', '%a_end%' => '</a>']);
+                    $response['msg'] = __('Error occurred. Please try again or try another :%a_start%update method:%a_end%', ['%a_start%' => '<a href="'.config('app.freescout_url').'/docs/update/" target="_blank">', '%a_end%' => '</a>']);
                     $response['msg'] .= '<br/><br/>'.$e->getMessage();
 
                     \Helper::logException($e);
@@ -344,7 +349,7 @@ class SystemController extends Controller
                         $response['new_version_available'] = \Updater::isNewVersionAvailable(config('app.version'));
                         $response['status'] = 'success';
                     } catch (\Exception $e) {
-                        $response['msg'] = __('Error occured').': '.$e->getMessage();
+                        $response['msg'] = __('Error occurred').': '.$e->getMessage();
                     }
                     if (!$response['msg'] && !$response['new_version_available']) {
                         // Adding session flash is useless as cache is cleated
@@ -361,7 +366,7 @@ class SystemController extends Controller
         }
 
         if ($response['status'] == 'error' && empty($response['msg'])) {
-            $response['msg'] = 'Unknown error occured';
+            $response['msg'] = 'Unknown error occurred';
         }
 
         return \Response::json($response);
@@ -380,5 +385,32 @@ class SystemController extends Controller
         $output = $outputLog->fetch();
 
         return response($output, 200)->header('Content-Type', 'text/plain');
+    }
+
+    /**
+     * Ajax HTML.
+     */
+    public function ajaxHtml(Request $request)
+    {
+        switch ($request->action) {
+            case 'job_details':
+                $job = \App\FailedJob::find($request->param);
+                if (!$job) {
+                    abort(404);
+                }
+
+                $html = '';
+                $payload = json_decode($job->payload, true);
+
+                if (!empty($payload['data']['command'])) {
+                    $html .= '<pre>'.print_r(unserialize($payload['data']['command']), 1).'</pre>';
+                }
+                
+                $html .= '<pre>'.$job->exception.'</pre>';
+
+                return response($html);
+        }
+
+        abort(404);
     }
 }

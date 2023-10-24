@@ -16,14 +16,22 @@ class SendNotificationToUsers implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    // Max retries + 1
-    public $tries = 168; // One per hour
-
     public $users;
 
     public $conversation;
 
     public $threads;
+
+    // Max retries + 1
+    public $tries = 168; // One per hour
+
+    /**
+     * The number of seconds the job can run before timing out.
+     * fwrite() function in /vendor/swiftmailer/swiftmailer/lib/classes/Swift/Transport/StreamBuffer.php
+     * in some cases may stuck and continue infinitely. This blocks queue:work and no other jobs are processed.
+     * So we need to set the timeout. On timeout the whole queue:work process is being killed by Laravel.
+     */
+    public $timeout = 120;
 
     /**
      * Create a new job instance.
@@ -50,9 +58,7 @@ class SendNotificationToUsers implements ShouldQueue
         \App\Misc\Mail::setMailDriver($mailbox, null, $this->conversation);
 
         // Threads has to be sorted here, if sorted before, they come here in wrong order
-        $this->threads = $this->threads->sortByDesc(function ($item, $key) {
-            return $item->id;
-        });
+        $this->threads = Thread::sortThreads($this->threads);
 
         $headers = [];
         $last_thread = $this->threads->first();
@@ -79,14 +85,20 @@ class SendNotificationToUsers implements ShouldQueue
         $prev_message_id = \App\Misc\Mail::MESSAGE_ID_PREFIX_NOTIFICATION_IN_REPLY.'-'.$this->conversation->id.'-'.md5($this->conversation->id).'@'.$mailbox->getEmailDomain();
         $headers['In-Reply-To'] = '<'.$prev_message_id.'>';
         $headers['References'] = '<'.$prev_message_id.'>';
+        // https://github.com/freescout-helpdesk/freescout/issues/2488
+        $headers['X-Auto-Response-Suppress'] = 'All';
 
         // We throw an exception if any of the send attempts throws an exception (connection error, etc)
         $global_exception = null;
 
         foreach ($this->users as $user) {
 
-            // User cam ne deleted.
+            // User can ne deleted from DB.
             if (!isset($user->id)) {
+                continue;
+            }
+
+            if ($user->isDeleted()) {
                 continue;
             }
 
@@ -169,7 +181,8 @@ class SendNotificationToUsers implements ShouldQueue
         if ($global_exception) {
             // Retry job with delay.
             // https://stackoverflow.com/questions/35258175/how-can-i-create-delays-between-failed-queued-job-attempts-in-laravel
-            if ($this->attempts() < $this->tries) {
+            // We do not try to resend Bounce messages: https://github.com/freescout-helpdesk/freescout/issues/3156
+            if ($this->attempts() < $this->tries && !$last_thread->isBounce()) {
                 if ($this->attempts() == 1) {
                     // Second attempt after 5 min.
                     $this->release(300);

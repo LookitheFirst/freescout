@@ -327,16 +327,24 @@ class Message
         }
 
         if (property_exists($header, 'subject')) {
-            $this->subject = \imap_utf8($header->subject);
-            if (\Str::startsWith(mb_strtolower($this->subject), '=?utf-8?')) {
+            // https://github.com/freescout-helpdesk/freescout/issues/2965
+            // Also imap_utf8() can't properly decode =?gb18030?B?1eLKx9K7t+Ky4srU08q8/g==?=
+            // iconv_mime_decode() - can.
+            // if (!\Str::startsWith(mb_strtolower($header->subject), '=?utf-8?')) {
+            //     $this->subject = \imap_utf8($header->subject);
+            // } else {
+            $this->subject = \MailHelper::decodeSubject($header->subject);
+            //}
+            
+            // if (\Str::startsWith(mb_strtolower($this->subject), '=?utf-8?')) {
 
-                // https://bugs.php.net/bug.php?id=68821
-                $this->subject = preg_replace_callback('/(=\?[^\?]+\?Q\?)([^\?]+)(\?=)/i', function($matches) {
-                    return $matches[1] . str_replace('_', '=20', $matches[2]) . $matches[3];
-                }, $header->subject);
+            //     // https://bugs.php.net/bug.php?id=68821
+            //     $this->subject = preg_replace_callback('/(=\?[^\?]+\?Q\?)([^\?]+)(\?=)/i', function($matches) {
+            //         return $matches[1] . str_replace('_', '=20', $matches[2]) . $matches[3];
+            //     }, $header->subject);
 
-                $this->subject = mb_decode_mimeheader($this->subject);
-            }
+            //     $this->subject = mb_decode_mimeheader($this->subject);
+            // }
         }
 
         if (property_exists($header, 'date')) {
@@ -405,11 +413,14 @@ class Message
                     $this->date = Carbon::parse($date);
                 } catch (\Exception $_e) {
                     $this->date = Carbon::now();
-                    \Helper::logException($_e, '[Webklex\IMAP\Message]');
-                    \Helper::logExceptionToActivityLog($_e, 
-                        \App\ActivityLog::NAME_EMAILS_FETCHING, 
-                        \App\ActivityLog::DESCRIPTION_EMAILS_FETCHING_ERROR
-                    );
+                    // No need to write this to log.
+                    // https://github.com/freescout-helpdesk/freescout/issues/2734
+                    // 
+                    // \Helper::logException($_e, '[Webklex\IMAP\Message]');
+                    // \Helper::logExceptionToActivityLog($_e, 
+                    //     \App\ActivityLog::NAME_EMAILS_FETCHING, 
+                    //     \App\ActivityLog::DESCRIPTION_EMAILS_FETCHING_ERROR
+                    // );
                     //throw new InvalidMessageDateException("Invalid message date. ID:".$this->getMessageId(), 1000, $e);
                 }
             }
@@ -807,7 +818,7 @@ class Message
             case self::ENC_8BIT:
                 return quoted_printable_decode(imap_8bit($string));
             case self::ENC_BINARY:
-                return imap_binary($string);
+                return imap_base64(imap_binary($string));
             case self::ENC_BASE64:
                 return imap_base64($string);
             case self::ENC_QUOTED_PRINTABLE:
@@ -847,17 +858,42 @@ class Message
             return $str;
         }
 
+        if (strtolower($from) == 'iso-2022-jp'){
+           $from = 'iso-2022-jp-ms';
+        }
+
         try {
             try {
-                if (function_exists('iconv') && $from != 'UTF-7' && $to != 'UTF-7') {
-                    // FreeScout #351
-                    return iconv($from, $to, $str);
-                } else {
+                // if (function_exists('iconv') && $from != 'UTF-7' && $to != 'UTF-7') {
+                //     // FreeScout #351
+                //     return iconv($from, $to, $str);
+                // } else {
+                //     if (!$from) {
+                //         return mb_convert_encoding($str, $to);
+                //     }
+
+                //     return mb_convert_encoding($str, $to, $from);
+                // }
+                
+                // Try iconv.
+                if (function_exists('iconv') && $from != 'UTF-7' && $to != 'UTF-7' && $from != 'iso-2022-jp-ms') {
+                    try {
+                        $result = iconv($from, $to.'//IGNORE', $str);
+                    } catch (\Exception $e) {
+                        $result = @iconv($from, $to, $str);
+                    }
+                }
+
+                // In some cases iconv can't decode the string and returns:
+                // Detected an illegal character in input string.
+                // https://github.com/freescout-helpdesk/freescout/issues/3089
+                if (!$result) {
                     if (!$from) {
                         return mb_convert_encoding($str, $to);
                     }
-
                     return mb_convert_encoding($str, $to, $from);
+                } else {
+                    return $result;
                 }
             } catch (\Exception $e) {
                 // FreeScout #360

@@ -22,6 +22,8 @@ var fs_filters = {};
 var fs_body_default = '<div><br></div>';
 var fs_prev_focus = true;
 
+var FS_STATUS_CLOSED = 3;
+
 // Ajax based notifications;
 var poly;
 // List of funcions preparin data for polycast receive request
@@ -164,34 +166,47 @@ var EditorDiscardButton = function (context) {
 var EditorInsertVarButton = function (context) {
 	var ui = $.summernote.ui;
 
-	// todo: fallback=
-	var contents =
-		'<select class="form-control summernote-inservar" tabindex="-1">'+
-		    '<option value="">'+Lang.get("messages.insert_var")+' ...</option>'+
-		    '<optgroup label="'+Lang.get("messages.mailbox")+'">'+
-		        '<option value="{%mailbox.email%}">'+Lang.get("messages.email")+'</option>'+
-		        '<option value="{%mailbox.name%}">'+Lang.get("messages.name")+'</option>'+
-		        '<option value="{%mailbox.fromName%}">'+Lang.get("messages.from_name")+'</option>'+
-		    '</optgroup>'+
-		    '<optgroup label="'+Lang.get("messages.conversation")+'">'+
-		        '<option value="{%conversation.number%}">'+Lang.get("messages.number")+'</option>'+
-		    '</optgroup>'+
-		    '<optgroup label="'+Lang.get("messages.customer")+'">'+
-		        '<option value="{%customer.fullName%}">'+Lang.get("messages.full_name")+'</option>'+
-		        '<option value="{%customer.firstName%}">'+Lang.get("messages.first_name")+'</option>'+
-		        '<option value="{%customer.lastName%}">'+Lang.get("messages.last_name")+'</option>'+
-		        '<option value="{%customer.email%}">'+Lang.get("messages.email_addr")+'</option>'+
-		    '</optgroup>'+
-		    '<optgroup label="'+Lang.get("messages.user")+'">'+
-		        '<option value="{%user.fullName%}">'+Lang.get("messages.full_name")+'</option>'+
-		        '<option value="{%user.firstName%}">'+Lang.get("messages.first_name")+'</option>'+
-		        '<option value="{%user.lastName%}">'+Lang.get("messages.last_name")+'</option>'+
-		        '<option value="{%user.jobTitle%}">'+Lang.get("messages.job_title")+'</option>'+
-		        '<option value="{%user.phone%}">'+Lang.get("messages.phone")+'</option>'+
-		        '<option value="{%user.email%}">'+Lang.get("messages.email_addr")+'</option>'+
-		        '<option value="{%user.photoUrl%}">'+Lang.get("messages.photo_url")+'</option>'+
-		    '</optgroup>'+
-	    '</select>';
+	var vars = {
+		mailbox: {
+			'mailbox.email': Lang.get("messages.email"),
+			'mailbox.name': Lang.get("messages.name"),
+			'mailbox.fromName': Lang.get("messages.from_name")
+		},
+		conversation: {
+			'conversation.number': Lang.get("messages.number")
+		},
+		customer: {
+			'customer.fullName': Lang.get("messages.full_name"),
+			'customer.firstName': Lang.get("messages.first_name"),
+			'customer.lastName': Lang.get("messages.last_name"),
+			'customer.email': Lang.get("messages.email_addr"),
+			'customer.company': Lang.get("messages.company"),
+		},
+		user: {
+			'user.fullName': Lang.get("messages.full_name"),
+			'user.firstName': Lang.get("messages.first_name"),
+			'user.lastName': Lang.get("messages.last_name"),
+			'user.jobTitle': Lang.get("messages.job_title"),
+			'user.phone': Lang.get("messages.phone"),
+			'user.email': Lang.get("messages.email_addr"),
+			'user.photoUrl': Lang.get("messages.photo_url"),
+
+		},
+	};
+
+	vars = fsApplyFilter('editor.vars', vars);
+
+	var contents = '<select class="form-control summernote-inservar" tabindex="-1">'+
+		    '<option value="">'+Lang.get("messages.insert_var")+' ...</option>';
+    for (var entity_name in vars) {
+    	contents += '<optgroup label="'+Lang.get("messages."+entity_name)+'">';
+		for (var var_name in vars[entity_name]) {
+			contents += '<option value="{%'+var_name+'%}">'+vars[entity_name][var_name]+'</option>';
+		}
+    	contents += '</optgroup>';
+    }
+
+	contents += '</select>';
 
 	// create button
 	var button = ui.button({
@@ -295,12 +310,30 @@ $(document).ready(function(){
 		}, 100);
 	});
 
+	$('#logout-link').click(function(e) {
+		$('#logout-form').submit();
+		e.preventDefault();
+	});
+
+	//applyVoidLinks();
+	$('ul.customer-contacts a.contact-main').click(function(e) {
+		copyToClipboard($(this).text());
+		e.preventDefault();
+	});
+
 	// Dirty JS hack because there was no way found to expand outer container when sidebar grows.
 	if ($('#conv-layout-customer').length && $(window).outerWidth() >= 1100 && $('.conv-sidebar-block').length > 2) {
 		adjustCustomerSidebarHeight();
 		setTimeout(adjustCustomerSidebarHeight, 2000);
-	}
+	}                                                   
 });
+
+/*function applyVoidLinks()
+{
+	$('a.void-link').click(function(e) {
+		e.preventDefault();
+	});
+}*/
 
 function initMuteMailbox()
 {
@@ -394,6 +427,14 @@ function initModals(html_tag)
 	});
 }
 
+function editorProcessInsertVar(editor)
+{
+	editor.parent().children().find('.summernote-inservar:first').on('change', function(event) {
+		editor.summernote('insertText', $(this).val());
+		$(this).val('');
+	});
+}
+
 function mailboxUpdateInit(from_name_custom)
 {
 	var selector = '#signature';
@@ -406,10 +447,7 @@ function mailboxUpdateInit(from_name_custom)
 			callbacks: {
 				onInit: function() {
 					$(selector).parent().children().find('.note-statusbar').remove();
-					$(selector).parent().children().find('.summernote-inservar:first').on('change', function(event) {
-						$(selector).summernote('insertText', $(this).val());
-						$(this).val('');
-					});
+					editorProcessInsertVar($(selector));
 				},
 				onImageUpload: function(files) {
 					if (!files) {
@@ -529,7 +567,7 @@ function summernoteInit(selector, new_options)
 		disableDragAndDrop: true,
 		toolbar: [
 		    // [groupName, [list of button]]
-		    ['style', ['bold', 'italic', 'underline', 'color', 'lists', 'removeformat', 'link', 'picture', 'codeview']],
+		    ['style', ['attachment', 'bold', 'italic', 'underline', 'color', 'lists', 'removeformat', 'link', 'picture', 'codeview']],
 		    ['actions-select', ['insertvar']]
 		],
 		buttons: buttons,
@@ -570,16 +608,31 @@ function summernoteInit(selector, new_options)
 	}*/
 
 	$el.summernote(options);
+
+	// To save data when editing the code directly
+	fsFixEditorCodeSaving($el)
+}
+
+// To save data when editing the code directly
+function fsFixEditorCodeSaving($el)
+{
+	$el.next().children().find('.note-codable').on('blur', function() {
+		if ($el.summernote('codeview.isActivated')) {
+			$el.val($el.summernote('code'));
+		}
+	});
 }
 
 function permissionsInit()
 {
 	$(document).ready(function(){
-	    $('.sel-all').click(function(event) {
+	    $('.sel-all').click(function(e) {
 			$("#permissions-fields input").attr('checked', 'checked');
+			e.preventDefault();
 		});
-		$('.sel-none').click(function(event) {
+		$('.sel-none').click(function(e) {
 			$("#permissions-fields input").removeAttr('checked');
+			e.preventDefault();
 		});
 	});
 }
@@ -782,7 +835,7 @@ function logsInit()
 function multiInputInit()
 {
 	$(document).ready(function() {
-	    $('.multi-add').click(function() {
+	    $('.multi-add').click(function(e) {
 	    	var clone = $(this).parents('.multi-container:first').children('.multi-item:first').clone(true, true);
 	    	var index = parseInt($(this).parents('.multi-container:first').children('.block-help:last').attr('data-max-i'));
 	    	if (isNaN(index)) {
@@ -802,13 +855,16 @@ function multiInputInit()
 	    	clone.insertAfter($(this).parents('.multi-container:first').children('.multi-item:last'));
 
 	    	$(this).parents('.multi-container:first').children('.block-help:last').attr('data-max-i', index);
+
+	    	e.preventDefault();
 		});
-		$('.multi-remove').click(function() {
+		$('.multi-remove').click(function(e) {
 	    	if ($(this).parents('.multi-container:first').children('.multi-item').length > 1) {
 	    		$(this).parents('.multi-item:first').remove();
 	    	} else {
 	    		$(this).parents('.multi-item:first').children(':input').val('');
 	    	}
+	    	e.preventDefault();
 		});
 	} );
 }
@@ -835,20 +891,35 @@ function fsAjax(data, url, success_callback, no_loader, error_callback, custom_o
 	}
 
 	// If this is conversation ajax request, add folder_id to the URL
-	if (url.indexOf('/conversation/') != -1) {
-		var folder_id = getQueryParam('folder_id');
-		if (folder_id) {
-			url += '?folder_id='+folder_id;
-		}
+    if (url.indexOf('/conversation/') != -1) {
+        var folder_id = getQueryParam('folder_id');
+        if (folder_id) {
+        	url = addQueryParam('folder_id', folder_id, url);
+        }
+    }
+
+    var preserve_xembed = false;
+    if (window.location.href.indexOf('x_embed=1') != -1) {
+    	url = addQueryParam('x_embed', 1, url);
+        preserve_xembed = true;
 	}
 
-	var options = {
-		url: url,
-		method: 'post',
-		dataType: 'json',
-		data: data,
-		success: success_callback,
-		error: error_callback
+    var override_success_callback = function(response) {
+        if (typeof(response.redirect_url) != "undefined") {
+            if (preserve_xembed && response.redirect_url.indexOf('x_embed=1') == -1) {
+            	response.redirect_url = addQueryParam('x_embed', 1, response.redirect_url);
+            }
+        }
+        return success_callback(response);
+    };
+
+    var options = {
+        url: url,
+        method: 'post',
+        dataType: 'json',
+        data: data,
+        success: override_success_callback,
+        error: error_callback
     };
 
     if (typeof(custom_options) == "object") {
@@ -941,7 +1012,7 @@ function initConversation()
 
 		// Change conversation assignee
 	    jQuery(".conv-user li > a").click(function(e){
-			if (!$(this).hasClass('active')) {
+			if (!$(this).hasClass('active') && !$(this).hasClass('disabled')) {
 				if (fsApplyFilter('conversation.can_change_user', true, {trigger: $(this)})) {
 					$(this).trigger('fs-conv-user-change');
 				}
@@ -968,7 +1039,7 @@ function initConversation()
 						showFloatingAlert('error', response.msg);
 						loaderHide();
 					} else {
-						showFloatingAlert('error', Lang.get("messages.error_occured"));
+						showFloatingAlert('error', Lang.get("messages.error_occurred"));
 						loaderHide();
 					}
 				});
@@ -1009,7 +1080,7 @@ function initConversation()
 					} else if (typeof(response.msg) != "undefined") {
 						showFloatingAlert('error', response.msg);
 					} else {
-						showFloatingAlert('error', Lang.get("messages.error_occured"));
+						showFloatingAlert('error', Lang.get("messages.error_occurred"));
 					}
 					loaderHide();
 				});
@@ -1060,32 +1131,10 @@ function initConversation()
 	    jQuery(".conv-add-note").click(function(e) {
 	    	var reply_block = $(".conv-reply-block");
 	    	if (reply_block.hasClass('hidden')  /*|| $(this).hasClass('inactive')*/) {
-	    		// Show
-				hideActionBlocks();
-				reply_block.removeClass('hidden')
-					.addClass('conv-note-block')
-					.removeClass('conv-forward-block')
-					.children().find(":input[name='is_note']:first").val(1);
-				$('#conv-subject').addClass('action-visible');
-				reply_block.children().find(":input[name='thread_id']:first").val('');
-				reply_block.children().find(":input[name='subtype']:first").val('');
-				//$(".conv-reply-block").children().find(":input[name='body']:first").val('');
-
-				// Note never changes Assignee by default
-				reply_block.children().find(":input[name='user_id']:first").val(getConvData('user_id'));
-
-	    		// Show default status
-	    		var input_status = reply_block.children().find(":input[name='status']:first");
-	    		input_status.val(input_status.attr('data-note-status'));
-
-	    		$(".attachments-upload:first :input, .attachments-upload:first li").remove();
-
-				$(".conv-action").addClass('inactive');
-				$(this).removeClass('inactive');
-				//$('#body').summernote("code", '');
-				$('#body').summernote('focus');
-
-				maybeScrollToReplyBlock();
+    			// To prevent browser autocomplete, clean body
+				// We have to insert this code to allow proper UL/OL
+				setReplyBody('<div><br></div>');
+				showNoteForm();
 			} /*else {
 				// Hide
 				$(".conv-action-block").addClass('hidden');
@@ -1126,6 +1175,17 @@ function initConversation()
 			discardDraft($(this).parents('.thread:first').attr('data-thread_id'));
 			e.preventDefault();
 		});
+
+		// Chat mode
+		// Show details in chat mode
+		var conv_top_blocks = $('#conv-top-blocks');
+		var is_chat_mode = false;
+		if (conv_top_blocks.length) {
+			if (!conv_top_blocks.children('.conv-top-block:first').length) {
+				conv_top_blocks.prev().hide();
+			}
+			is_chat_mode = true;
+		}
 
 	    // Delete conversation
 	    jQuery(".conv-delete,.conv-delete-forever").click(function(e){
@@ -1175,6 +1235,12 @@ function initConversation()
 		// Edit thread
 		jQuery(".thread-edit-trigger").click(function(e){
 			editThread($(this));
+			e.preventDefault();
+		});
+
+		// Delete thread
+		jQuery(".thread-delete-trigger").click(function(e){
+			deleteThread($(this));
 			e.preventDefault();
 		});
 
@@ -1229,11 +1295,107 @@ function initConversation()
 		maybeShowDraft();
 		processLinks();
 		initConvSettings();
+
+		// Show reply form in chat mode
+		if (is_chat_mode && !$('.conv-action.inactive:first').length) {
+			$(".conv-reply").click();
+		}
+		// Send reply on ENTER press in chat mode
+		if (is_chat_mode) {
+
+			// Accept chat - assign to yourself
+			$('button.chat-accept:visible').click(function(e) {
+				var button = $(this);
+				button.button('loading');
+
+				fsAjax(
+					{
+						action: 'conversation_change_user',
+						user_id: getGlobalAttr('auth_user_id'),
+						conversation_id: getGlobalAttr('conversation_id')
+					},
+					laroute.route('conversations.ajax'),
+					function(response) {
+						if (isAjaxSuccess(response)) {
+							window.location.href = '';
+						} else {
+							showAjaxResult(response);
+							button.button('reset');
+						}
+					}, true
+				);
+
+				e.preventDefault();
+			});
+
+			// End chat - close conversation
+			$('button.chat-end:visible').click(function(e) {
+				var button = $(this);
+				button.button('loading');
+
+				fsAjax(
+					{
+						action: 'conversation_change_status',
+						status: FS_STATUS_CLOSED,
+						conversation_id: getGlobalAttr('conversation_id'),
+						folder_id: getQueryParam('folder_id')
+					},
+					laroute.route('conversations.ajax'),
+					function(response) {
+						if (isAjaxSuccess(response)) {
+							window.location.href = '';
+						} else {
+							showAjaxResult(response);
+							button.button('reset');
+						}
+					}, true
+				);
+
+				e.preventDefault();
+			});
+
+			// Automatically refresh chat list
+			$(document).on('keydown', function(e) {
+				// Skip inputs and editable areas.
+				if (!e.target
+					|| e.which != 13
+					|| $(e.target).is(':input')
+					|| e.altKey
+					|| e.shiftKey
+					|| e.metaKey
+					|| $('.modal:visible').length
+					//|| $('#conv-status.open:first').length
+				) {
+					return;
+				}
+				
+				if (e.which == 13
+					&& !e.shiftKey
+					&& $(e.target).attr('contentEditable') == 'true'
+
+				) {
+					if (!$(':focus').hasClass('note-editable')) {
+						return;
+					}
+					var body = $('#body').val();
+					if (!body || body == '<div><br></div>') {
+						return;
+					}
+					var button = $('div.conv-block:not(.conv-note-block) div.conv-reply-body:visible .btn-reply-submit:first');
+					if (button.length) {
+						button.click();
+						// Does not work
+						e.preventDefault();
+						e.stopPropagation();
+					}
+				}
+			});
+		}
 	});
 }
 
 // Create new email conversation
-function switchToNewEmailConversation(type_email)
+function switchToNewEmailConversation()
 {
 	$('#email-conv-switch').addClass('active');
 	$('#phone-conv-switch').removeClass('active');
@@ -1246,7 +1408,7 @@ function switchToNewEmailConversation(type_email)
 	$('.conv-block:first').removeClass('conv-note-block').removeClass('conv-phone-block');
 	$('#form-create :input[name="is_note"]:first').val(0);
 	$('#form-create :input[name="is_phone"]:first').val(0);
-	$('#form-create :input[name="type"]:first').val(type_email);
+	$('#form-create :input[name="type"]:first').val(1);
 }
 
 // Create new phone conversation
@@ -1330,6 +1492,39 @@ function getConvData(field)
 	return null;
 }
 
+function showNoteForm()
+{
+	var reply_block = $(".conv-reply-block");
+	if (reply_block.hasClass('hidden')  /*|| $(this).hasClass('inactive')*/) {
+		// Show
+		hideActionBlocks();
+		reply_block.removeClass('hidden')
+			.addClass('conv-note-block')
+			.removeClass('conv-forward-block')
+			.children().find(":input[name='is_note']:first").val(1);
+		$('#conv-subject').addClass('action-visible');
+		reply_block.children().find(":input[name='thread_id']:first").val('');
+		reply_block.children().find(":input[name='subtype']:first").val('');
+		//$(".conv-reply-block").children().find(":input[name='body']:first").val('');
+
+		// Note never changes Assignee by default
+		reply_block.children().find(":input[name='user_id']:first").val(getConvData('user_id'));
+
+		// Show default status
+		var input_status = reply_block.children().find(":input[name='status']:first");
+		input_status.val(input_status.attr('data-note-status'));
+
+		$(".attachments-upload:first :input, .attachments-upload:first li").remove();
+
+		$(".conv-action").addClass('inactive');
+		$(this).removeClass('inactive');
+		//$('#body').summernote("code", '');
+		$('#body').summernote('focus');
+
+		maybeScrollToReplyBlock();
+	}
+}
+
 // Prepare reply/forward form for display
 function prepareReplyForm()
 {
@@ -1376,14 +1571,21 @@ function showReplyForm(data, scroll_offset)
 				// Display body value in editor
 				$('#body').summernote("code", data[field]);
 			}
+			// Happens when opening draft or after Undo
 			if (field == 'to_email' || field == 'cc' || field == 'bcc') {
 				if (data && typeof(data.to) != "undefined") {
+					// Clean previous values.
+					// Also allows to avoid duplicating emails - for example
+					// when restoring  a draft in a conversation with CC.
+					cleanSelect2($("#"+field));
 					for (var i in data[field]) {
+						var email = data[field][i];
 						addSelect2Option($("#"+field), {
-							id: data[field][i], text: data[field][i]
+							id: email, text: email
 						});
 					}
 				} else {
+					// It's not clear when this is supposed to happen.
 					$("#"+field).children('option:first').removeAttr('selected');
 				}
 			}
@@ -1411,6 +1613,12 @@ function showReplyForm(data, scroll_offset)
 		scroll_offset = 0;
 	}
 	maybeScrollToReplyBlock(scroll_offset);
+}
+
+function cleanSelect2(select)
+{
+	select.children('option').remove();
+	select.val('').trigger('change');
 }
 
 // Add an option to select2
@@ -1442,8 +1650,13 @@ function showAttachments(data)
 			attachments_container.prepend(input_html);
 
 			// Links
-			var attachment_html = '<li class="atachment-upload-'+attachment.id+' attachment-loaded"><a href="'+attachment.url+'" class="break-words" target="_blank">'+attachment.name+'<span class="ellipsis">…</span> </a> <span class="text-help">('+formatBytes(attachment.size)+')</span> <i class="glyphicon glyphicon-remove" onclick="removeAttachment(\''+attachment.id+'\')"></i></li>';
+			var attachment_html = '<li class="atachment-upload-'+attachment.id+' attachment-loaded"><a href="'+attachment.url+'" class="break-words" target="_blank">'+attachment.name+'<span class="ellipsis">…</span> </a> <span class="text-help">('+formatBytes(attachment.size)+')</span> <i class="glyphicon glyphicon-remove" data-attachment-id="'+attachment.id+'"></i></li>';
 			attachments_container.find('ul:first').append(attachment_html);
+
+			// Delete attachment
+			$('li.attachment-loaded .glyphicon-remove:first').click(function(e) {
+				removeAttachment($(this).attr('data-attachment-id'));
+			});
 
 			attachments_container.show();
         }
@@ -1472,6 +1685,7 @@ function convEditorInit()
 	});
 
 	var options = {
+		placeholder: $('#body').attr('placeholder'),
 		minHeight: 120,
 		dialogsInBody: true,
 		dialogsFade: true,
@@ -1513,6 +1727,7 @@ function convEditorInit()
 	options = fsApplyFilter('editor.options', options);
 
 	$('#body').summernote(options);
+	fsFixEditorCodeSaving($('#body'));
 	$('#editor_bottom_toolbar a[data-modal-applied="1"]').removeAttr('data-modal-applied');
 	var html = $('#editor_bottom_toolbar').html();
 	$('.note-statusbar').addClass('note-statusbar-toolbar form-inline').html(html);
@@ -1541,7 +1756,7 @@ function convEditorInit()
 function autosaveDraft()
 {
 	if (!isNote() || isPhone()) {
-		saveDraft(false, true);
+		saveDraft(false, true, true);
 	}
 	setTimeout(function(){ autosaveDraft() }, fs_draft_autosave_period*1000);
 }
@@ -1577,6 +1792,8 @@ function onReplyChange()
 // Save reply draft or note on form focus out
 function onReplyBlur()
 {
+	$('#body').summernote('editor.saveRange');
+
 	// If start saving draft immediately, then when Send Reply is clicked
 	// two ajax requests will be sent at the same time.
 	setTimeout(function() {
@@ -1591,7 +1808,7 @@ function onReplyBlur()
 			// Save note
 			rememberNote();
 		} else {
-  			saveDraft(false, true);
+  			saveDraft(false, true, true);
   		}
 	  	//}
 	  }, 500);
@@ -1619,13 +1836,16 @@ function generateDummyId()
 }
 
 // Save file uploaded in editor
-function editorSendFile(file, attach, is_conv, editor_id)
+function editorSendFile(file, attach, is_conv, editor_id, container)
 {
 	if (!file || typeof(file.type) == "undefined") {
 		return false;
 	}
+	if (typeof(container) == "undefined") {
+		container = $(".attachments-upload:first");
+	}
 
-	var attachments_container = $(".attachments-upload:first");
+	var attachments_container = container;
 	var attachment_dummy_id = generateDummyId();
 	var route = '';
 
@@ -1652,8 +1872,14 @@ function editorSendFile(file, attach, is_conv, editor_id)
 
 	// Show loader
 	if (attach) {
-		var attachment_html = '<li class="atachment-upload-'+attachment_dummy_id+'"><img src="'+Vars.public_url+'/img/loader-tiny.gif" width="16" height="16"/> <a href="javascript:void(0);" class="break-words disabled" target="_blank">'+file.name+'<span class="ellipsis">…</span> </a> <span class="text-help">('+formatBytes(file.size)+')</span> <i class="glyphicon glyphicon-remove" onclick="removeAttachment(\''+attachment_dummy_id+'\')"></i></li>';
-		$('.attachments-upload:first ul:first').append(attachment_html);
+		var attachment_html = '<li class="atachment-upload-'+attachment_dummy_id+'"><img src="'+Vars.public_url+'/img/loader-tiny.gif" width="16" height="16"/> <a href="#" class="break-words disabled" target="_blank">'+file.name+'<span class="ellipsis">…</span> </a> <span class="text-help">('+formatBytes(file.size)+')</span> <i class="glyphicon glyphicon-remove" data-attachment-id="'+attachment_dummy_id+'"></i></li>';
+		attachments_container.children('ul:first').append(attachment_html);
+
+		// Delete attachment
+		$('li.atachment-upload-'+attachment_dummy_id+' .glyphicon-remove:first').click(function(e) {
+			removeAttachment($(this).attr('data-attachment-id'));
+		});
+
 		attachments_container.show();
 	} else {
 		loaderShow();
@@ -1675,7 +1901,7 @@ function editorSendFile(file, attach, is_conv, editor_id)
 		type: 'POST',
 		success: function(response){
 			if (typeof(response.url) == "undefined" || !response.url) {
-				showFloatingAlert('error', Lang.get("messages.error_occured"));
+				showFloatingAlert('error', Lang.get("messages.error_occurred"));
 				loaderHide();
 				removeAttachment(attachment_dummy_id);
 				return;
@@ -1725,7 +1951,7 @@ function editorSendFile(file, attach, is_conv, editor_id)
 				loaderHide();
 			}
 			console.log(textStatus+": "+errorThrown);
-			showFloatingAlert('error', Lang.get("messages.error_occured"));
+			showFloatingAlert('error', Lang.get("messages.error_occurred"));
 		}
 	});
 }
@@ -1733,8 +1959,7 @@ function editorSendFile(file, attach, is_conv, editor_id)
 function removeAttachment(attachment_id)
 {
 	$('.atachment-upload-'+attachment_id).remove();
-	// Remove inputs
-	$(".attachments-upload:first :input[value='"+attachment_id+"']");
+	//attachment.parent().parent().children(":input[value='"+attachment_id+"']");
 }
 
 
@@ -1759,9 +1984,16 @@ function initNewConversation(is_phone)
     	if (typeof(is_phone) != "undefined") {
         	switchToNewPhoneConversation();
         }
-	    $('#toggle-email').click(function() {
+	    $('#toggle-email').click(function(e) {
 			$('#field-to_email').show();
 			$(this).hide();
+			e.preventDefault();
+		});
+		$('#email-conv-switch').click(function() {
+			switchToNewEmailConversation();
+		});
+		$('#phone-conv-switch').click(function() {
+			switchToNewPhoneConversation();
 		});
     });
 }
@@ -1805,7 +2037,7 @@ function initRecipientSelector(custom_options, selector)
 
 			// Don't allow to create a tag if there is no @ symbol
 			if (typeof(custom_options.allow_non_emails) == "undefined") {
-			    if (value.indexOf('@') === -1) {
+			    if (!/^.+@.+$/.test(value)) {
 					// Return null to disable tag creation
 					return null;
 			    }
@@ -1870,10 +2102,11 @@ function initReplyForm(load_attachments, init_customer_selector, is_new_conv)
 		}
 
 		// Show CC
-	    $('#toggle-cc').click(function() {
+	    $('#toggle-cc').click(function(e) {
 			$('.field-cc').removeClass('hidden');
 			$(this).parent().remove();
 			initRecipientSelector();
+			e.preventDefault();
 		});
 
 		// After send
@@ -1933,15 +2166,21 @@ function initReplyForm(load_attachments, init_customer_selector, is_new_conv)
 	    	data += '&action=send_reply';
 
 	    	button.button('loading');
+	    	var is_note = isNote();
+	    	var is_chat = isChatMode();
+	    	var disable_editor = isChatMode() && !is_note;
+	    	if (disable_editor) {
+	    		$('#body').summernote('disable');
+	    	}
 
 			fsAjax(data, laroute.route('conversations.ajax'), function(response) {
 					if (typeof(response.status) != "undefined" && response.status == 'success') {
 						// Forget note
-						if (isNote()) {
+						if (is_note) {
 							fs_autosave_note = false;
 							forgetNote(getGlobalAttr('conversation_id'));
 						}
-						if (typeof(response.redirect_url) != "undefined") {
+						if (typeof(response.redirect_url) != "undefined" && !is_chat) {
 							window.location.href = response.redirect_url;
 						} else {
 							window.location.href = '';
@@ -1949,6 +2188,9 @@ function initReplyForm(load_attachments, init_customer_selector, is_new_conv)
 					} else {
 						showAjaxError(response);
 						button.button('reset');
+						if (disable_editor) {
+							$('#body').summernote('enable');
+						}
 					}
 					loaderHide();
 					fs_processing_send_reply = false;
@@ -1958,11 +2200,19 @@ function initReplyForm(load_attachments, init_customer_selector, is_new_conv)
 					showFloatingAlert('error', Lang.get("messages.ajax_error"));
 					loaderHide();
 					button.button('reset');
+					if (disable_editor) {
+						$('#body').summernote('enable');
+					}
 					fs_processing_send_reply = false;
 				});
 
 			e.preventDefault();
-		})
+		});
+
+	    $('#conv-subject .switch-to-note').click(function(e) {
+			switchToNote();
+			e.preventDefault();
+		});
 	});
 }
 
@@ -2083,6 +2333,16 @@ function getQueryParam(name, qs) {
     }
 }
 
+function addQueryParam(name, value, url)
+{
+	var search = url.substring(url.indexOf('?') + 1);
+	if (search != url) {
+		return url + '&' + encodeURIComponent(name)+'=' + encodeURIComponent(value);
+	} else {
+		return url + '?' + encodeURIComponent(name) + '=' + encodeURIComponent(value);
+	}
+}
+
 // Show bootstrap modal
 function showModal(params)
 {
@@ -2095,6 +2355,10 @@ function triggerModal(a, params)
 {
     if (typeof(params) == "undefined") {
     	params = {};
+    }
+
+    if (typeof(params.options) == "undefined") {
+    	params.options = {};
     }
 
     if (typeof(a) == "undefined" || !a) {
@@ -2188,7 +2452,7 @@ function triggerModal(a, params)
             '<div class="modal-content">',
                 '<div class="modal-header '+(params.no_header == 'true' ? 'hidden' : '')+'">',
                     '<button type="button" class="close" data-dismiss="modal" aria-label="'+Lang.get("messages.close")+'"><span>&times;</span></button>',
-                    '<h3 class="modal-title" id="jsmodal-label">'+title+'</h3>',
+                    '<h3 class="modal-title" id="jsmodal-label">'+htmlEscape(title)+'</h3>',
                 '</div>',
                 '<div class="modal-body '+(fit == 'true' ? 'modal-body-fit' : '')+'"><div class="text-center modal-loader"><img src="'+Vars.public_url+'/img/loader-grey.gif" width="31" height="31"/></div></div>',
                 '<div class="modal-footer '+(params.no_footer == 'true' ? 'hidden' : '')+'">',
@@ -2204,7 +2468,7 @@ function triggerModal(a, params)
     //     modal.on('shown.bs.modal', onshow);
     // }
 
-    modal.modal();
+    modal.modal(params.options);
 
     modal.on('hidden.bs.modal', function () {
 	    $(this).remove();
@@ -2239,7 +2503,7 @@ function triggerModal(a, params)
 			        }
                 },
                 error: function(data) {
-                    modal.children().find(".modal-body").html('<p class="alert alert-danger">'+Lang.get("messages.error_occured")+'</p>');
+                    modal.children().find(".modal-body").html('<p class="alert alert-danger">'+Lang.get("messages.error_occurred")+'</p>');
                 }
             });
         }, 500);
@@ -2260,8 +2524,17 @@ function showAjaxError(response, no_autohide)
 	if (msg) {
 		showFloatingAlert('error', response.msg, no_autohide);
 	} else {
-		showFloatingAlert('error', Lang.get("messages.error_occured"), no_autohide);
+		showFloatingAlert('error', Lang.get("messages.error_occurred"), no_autohide);
 	}
+}
+
+function initAfterSendModal(modal)
+{
+	$(document).ready(function() {
+		modal.children().find(".after-send-save:first").click(function(e) {
+			saveAfterSend(e.target);
+		});
+	});
 }
 
 // Save default redirect
@@ -2271,9 +2544,14 @@ function saveAfterSend(el)
 	button.button('loading');
 
 	var value = $(el).parents('.modal-body:first').children().find('[name="after_send_default"]:first').val();
+
+	var mailbox_id = getGlobalAttr('mailbox_id');
+	if (!mailbox_id) {
+		mailbox_id = $(el).parents('.modal-body:first').children().find('[name="default_redirect_mailbox_id"]:first').val()
+	}
 	data = {
 		value: value,
-		mailbox_id: getGlobalAttr('mailbox_id'),
+		mailbox_id: mailbox_id,
 		action: 'save_after_send'
 	};
 
@@ -2301,7 +2579,7 @@ function initMailboxToolbar()
 {
 	$(document).ready(function() {
 		// Empty trash
-		$(".mailbox-empty-trash").click(function(e) {
+		$(".mailbox-empty-folder").click(function(e) {
 			showModalDialog('#conversations-bulk-actions-delete-modal', {
 				on_show: function(modal) {
 					modal.children().find('.delete-conversation-ok:first').click(function(e) {
@@ -2310,8 +2588,9 @@ function initMailboxToolbar()
 
 						fsAjax(
 							{
-								action: 'empty_trash',
-								folder_id: getGlobalAttr('folder_id')
+								action: 'empty_folder',
+								folder_id: getGlobalAttr('folder_id'),
+								mailbox_id: getGlobalAttr('mailbox_id')
 							},
 							laroute.route('conversations.ajax'),
 							function(response) {
@@ -2429,6 +2708,12 @@ function loadConversations(page, table, no_loader)
 		if (/^sorting_/.test(data_name)) {
 			sorting[data_name.replace(/^sorting_/, '')] = datas[data_name];
 		}
+	}
+
+	if (typeof(URL) != "undefined") {
+		const url = new URL(window.location);
+		url.searchParams.set('page', page);
+		window.history.replaceState({}, '', url);
 	}
 
 	fsAjax(
@@ -2835,7 +3120,7 @@ function initCustomerSelector(input, custom_options)
 			createTag: function (params) {
 				// Don't allow to create a tag if there is no @ symbol
 				if (typeof(custom_options.allow_non_emails) == "undefined") {
-				    if (params.term.indexOf('@') === -1) {
+				    if (!/^.+@.+$/.test(params.term)) {
 						// Return null to disable tag creation
 						return null;
 				    }
@@ -2948,7 +3233,7 @@ function userProfileInit()
 						showFloatingAlert('success', Lang.get("messages.invite_sent"));
 					}
 				} else {
-					showAjaxError(response);
+					showAjaxError(response, true);
 				}
 				button.button('reset');
 			},
@@ -3350,10 +3635,10 @@ function polycastInit()
 	    });
 	}
 
-	// Refresh folders
+	// Refresh folders and conversations list
     var mailbox_id = getGlobalAttr('mailbox_id');
     var el_folders = $('#folders');
-    if (mailbox_id && el_folders.length) {
+    if (mailbox_id && el_folders.length && !isChatMode()) {
 	    var channel = poly.subscribe('mailbox.'+mailbox_id);
 
 	    channel.on('App\\Events\\RealtimeMailboxNewThread', function(data, event){
@@ -3364,7 +3649,19 @@ function polycastInit()
 		    if (typeof(data.folders_html) != "undefined" && data.folders_html) {
 		    	var folder_id = el_folders.children('li.active:first').attr('data-folder_id');
 		    	el_folders.html(data.folders_html);
-		    	el_folders.children('li[data-folder_id="'+folder_id+'"]').addClass('active');
+		    	var active_folder = el_folders.children('li[data-folder_id="'+folder_id+'"]');
+		    	active_folder.addClass('active');
+
+		    	// Update number of active conversations in the page title
+		    	if (!getGlobalAttr('conversation_id')) {
+			    	var new_count = parseInt(active_folder.attr('data-active-count'));
+			    	if (!isNaN(new_count) && new_count > 0) {
+			    		new_count = '('+new_count+') ';
+			    	} else {
+			    		new_count = '';
+			    	}
+			    	document.title = new_count+document.title.replace(/^\(\d+\) /, "");
+			    }
 		    }
 
 		    // If there are no conversations selected refresh conversations table
@@ -3374,11 +3671,67 @@ function polycastInit()
 	    });
 	}
 
+    var chats = $('#folders.chats:first');
+    if (mailbox_id && chats.length) {
+	    var channel = poly.subscribe('chat.'+mailbox_id);
+
+	    channel.on('App\\Events\\RealtimeChat', function(data, event){
+	        if (!data || typeof(data.mailbox_id) == "undefined" || data.mailbox_id != mailbox_id) {
+	        	return;
+		    }
+
+		    if (typeof(data.chats_html) != "undefined" && data.chats_html) {
+		    	var chat_id = chats.children('li.active:first').attr('data-chat_id');
+		    	var header_html = chats.children('li:first').prop('outerHTML');
+
+		    	chats.html(header_html+data.chats_html);
+		    	
+		    	var active_chat = chats.children('li[data-chat_id="'+chat_id+'"]');
+		    	active_chat.addClass('active');
+
+		    	initChats();
+		    }
+	    });
+
+	    initChats();
+	}
+
     // at any point you can disconnect
     //poly.disconnect();
 
     // and when you disconnect, you can again at any point reconnect
     //poly.reconnect();
+}
+
+function initChats()
+{
+	$('.chats-load-more').click(function(e) {
+		var button = $(this);
+
+		button.button('loading');
+
+		fsAjax(
+			{
+				action: 'chats_load_more',
+				mailbox_id: getGlobalAttr('mailbox_id'),
+				offset: $('#folders .chat-item').length - 1,
+			},
+			laroute.route('conversations.ajax'),
+			function(response) {
+				if (isAjaxSuccess(response)) {
+					button.parent().before(response.html);
+					button.parent().remove();
+					initChats();
+				} else {
+					showAjaxResult(response);
+				}
+				button.button('reset');
+			}, true
+		);
+
+		e.preventDefault();
+		e.stopPropagation();
+	});
 }
 
 function convIsChat()
@@ -3581,12 +3934,12 @@ function initSystemStatus()
 								showAjaxError({msg: response.msg}, true);
 								button.button('reset');
 							} else {
-								showAjaxError({msg: htmlDecode(Lang.get("messages.error_occured_updating"))}, true);
+								showAjaxError({msg: htmlDecode(Lang.get("messages.error_occurred_updating"))}, true);
 								button.button('reset');
 							}
 						}, true,
 						function() {
-							showFloatingAlert('error', htmlDecode(Lang.get("messages.error_occured_updating")), true);
+							showFloatingAlert('error', htmlDecode(Lang.get("messages.error_occurred_updating")), true);
 							ajaxFinish();
 						}
 					);
@@ -3662,7 +4015,7 @@ function isNewConversation()
  * Save draft automatically, on reply change or on click.
  * Validation is not needed.
  */
-function saveDraft(reload_page, no_loader)
+function saveDraft(reload_page, no_loader, do_not_save_empty)
 {
 	if (!reload_page && fs_processing_save_draft) {
 		return;
@@ -3679,6 +4032,14 @@ function saveDraft(reload_page, no_loader)
 	if (!form || !form.length) {
 		finishSaveDraft();
 		return;
+	}
+
+	// Do not auto-save draft is there is no thread_id and body.
+	if (typeof(do_not_save_empty) != "undefined") {
+		if (!$('.form-reply:visible:first :input[name="thread_id"]:first').val() && !$('#body').val()) {
+			fs_processing_save_draft = false;
+			return;
+		}
 	}
 
 	var button = form.children().find('.note-actions .note-btn:first');
@@ -3815,8 +4176,10 @@ function followConversation(action)
 				var opposite = '';
 				if (action == 'follow') {
 					opposite = 'unfollow';
+					$('#conv-layout').addClass('conv-following');
 				} else {
 					opposite = 'follow';
+					$('#conv-layout').removeClass('conv-following');
 				}
 				$('.conv-follow[data-follow-action="'+action+'"]').addClass('hidden');
 				$('.conv-follow[data-follow-action="'+opposite+'"]').removeClass('hidden');
@@ -3940,7 +4303,7 @@ function discardDraft(thread_id)
 		'</div>';
 
 	// Discard note
-	if (typeof(thread_id) == "undefined" && isNote()) {
+	if (typeof(thread_id) == "undefined" && isNote() && !isNewConversation()) {
 		showModalDialog(confirm_html, {
 			on_show: function(modal) {
 				modal.children().find('.discard-draft-confirm:first').click(function(e) {
@@ -4025,6 +4388,39 @@ function editThread(button)
 				thread_container.children().hide();
 				thread_container.prepend(response.html);
 				summernoteInit(thread_container.find('.thread-editor:first'));
+
+				thread_container.children().find('.thread-editor-cancel:first').click(function(e) {
+					cancelThreadEdit(e.target);
+					e.preventDefault();
+				});
+				thread_container.children().find('.thread-editor-save:first').click(function(e) {
+					saveThreadEdit(e.target);
+					e.preventDefault();
+				});
+			} else {
+				showAjaxError(response);
+			}
+		}
+	);
+}
+
+// Delete thread (note)
+function deleteThread(button)
+{
+	var thread_container = button.parents('.thread:first');
+	
+	button.button('loading');
+
+	fsAjax({
+			action: 'delete_thread',
+			thread_id: thread_container.attr('data-thread_id')
+		},
+		laroute.route('conversations.ajax'),
+		function(response) {
+			loaderHide();
+			button.button('reset');
+			if (isAjaxSuccess(response)) {
+				thread_container.remove();
 			} else {
 				showAjaxError(response);
 			}
@@ -4103,7 +4499,7 @@ function hideActionBlocks()
 	$("#conv-subject").removeClass('action-visible');
 }
 
-function getReplyBody(text)
+function getReplyBody()
 {
 	return $("#body").val();
 }
@@ -4193,23 +4589,24 @@ function conversationsTableInit()
 	converstationBulkActionsInit();
 	convListSortingInit();
 
-	if ("ontouchstart" in window)
-	{
-		$(document).ready(function() {
-			$('.conv-row').on('contextmenu', function(event) {
-				event.preventDefault();
-				event.stopPropagation();
-			});
-
-			$('.conv-row').on('taphold', {duration: 700}, function(event) {
-				var row = $(event.target).parents('.conv-row');
-				var checkbox = $(row).find('input.conv-checkbox');
-				$(checkbox).prop('checked', !checkbox.prop('checked'));
-				$(checkbox).trigger('change');
-				$(row).toggleClass('selected');
-			});
+	// When checking "ontouchstart" it does not work in the mobile app
+	// if ("ontouchstart" in window)
+	// {
+	$(document).ready(function() {
+		$('.conv-row').on('contextmenu', function(event) {
+			event.preventDefault();
+			event.stopPropagation();
 		});
-	}
+
+		$('.conv-row').on('taphold', {duration: 700}, function(event) {
+			var row = $(event.target).parents('.conv-row');
+			var checkbox = $(row).find('input.conv-checkbox');
+			$(checkbox).prop('checked', !checkbox.prop('checked'));
+			$(checkbox).trigger('change');
+			$(row).toggleClass('selected');
+		});
+	});
+	//}
 }
 
 // Get ids of the selected conversations
@@ -4267,6 +4664,10 @@ function converstationBulkActionsInit()
 
 		// Change conversation assignee
 		$(".conv-user li > a", bulk_buttons).click(function(e) {
+			if ($(this).hasClass('disabled')) {
+				return;
+			}
+
 			var user_id = $(this).data('user_id');
 
 			var conv_ids = getSelectedConversations(checkboxes);
@@ -4416,7 +4817,7 @@ function maybeShowStoredNote()
 			conversation_notes[conversation_id].note.trim()
 		) {
 			setReplyBody(conversation_notes[conversation_id].note);
-			switchToNote();
+			showNoteForm();
 		}
 	}
 }
@@ -4654,6 +5055,32 @@ function initModulesList()
 
 			e.preventDefault();
 		});
+		$('.update-all-trigger').click(function(e) {
+			var button = $(this);
+
+			button.button('loading');
+			var aliases = $.map($("#new_versions_list a[data-module-alias]"), function(el) {
+			    return $(el).attr("data-module-alias");
+			});
+
+			fsAjax(
+				{
+					action: 'update_all',
+					aliases: aliases
+				},
+				laroute.route('modules.ajax'),
+				function(response) {
+					if (isAjaxSuccess(response)) {
+						window.location.href = '';
+					} else {
+						showAjaxError(response);
+						button.button('reset');
+					}
+				}, true
+			);
+
+			e.preventDefault();
+		});
 		$('.deactivate-license-trigger').click(function(e) {
 			var button = $(this);
 			var alias = button.parents('.module-card:first').attr('data-alias');
@@ -4674,6 +5101,12 @@ function initModulesList()
 					}
 				}, true
 			);
+		});
+
+		$('.install-module-form').submit(function(e) {
+			installModule($(this).attr('data-module-alias'));
+			e.preventDefault();
+			return false;
 		});
 	});
 }
@@ -4795,6 +5228,14 @@ function inApp(topic, token)
 		if (!getCookie('in_app')) {
 			setCookie('in_app', '1');
 		}
+		$('#navbar-back').click(function(e) {
+			goBack();
+			e.preventDefault();
+		});
+		$('a.in-app-switcher').click(function(e) {
+			switchHelpdeskUrl();
+			e.preventDefault();
+		});
 	});
 }
 
@@ -4838,6 +5279,11 @@ function getCookie(name)
         "(?:^|; )" + name.replace(/([\.$?*|{}\(\)\[\]\\\/\+^])/g, '\\$1') + "=([^;]*)"
     ));
     return matches ? decodeURIComponent(matches[1]) : undefined
+}
+
+function deleteCookie(name)
+{
+    document.cookie = name+'=;path=/;expires=Thu, 01 Jan 1970 00:00:01 GMT;';
 }
 
 function fsAddAction(action, callback, priority)
@@ -4948,7 +5394,7 @@ function initConvSettings()
                     if (typeof (response.msg) != "undefined") {
                         showFloatingAlert('error', response.msg);
                     } else {
-                        showFloatingAlert('error', Lang.get("messages.error_occured"));
+                        showFloatingAlert('error', Lang.get("messages.error_occurred"));
                     }
                     loaderHide();
                 }
@@ -5027,4 +5473,33 @@ function closeAllModals()
 
 function replaceAll(text, search, replacement) {
     return text.split(search).join(replacement);
+}
+
+function initLogsTable()
+{
+	$(document).ready(function () {
+      $('.table-container tr').on('click', function () {
+        $('#' + $(this).data('display')).toggle();
+      });
+      $('#table-log').DataTable({
+        "order": [$('#table-log').data('orderingIndex'), 'desc'],
+        "stateSave": true,
+        "stateSaveCallback": function (settings, data) {
+          window.localStorage.setItem("datatable", JSON.stringify(data));
+        },
+        "stateLoadCallback": function (settings) {
+          var data = JSON.parse(window.localStorage.getItem("datatable"));
+          if (data) data.start = 0;
+          return data;
+        }
+      });
+      $('#delete-log, #clean-log, #delete-all-log').click(function () {
+        return confirm('Are you sure?');
+      });
+    });
+}
+
+function isChatMode()
+{
+	return $("body:first").hasClass('chat-mode');
 }

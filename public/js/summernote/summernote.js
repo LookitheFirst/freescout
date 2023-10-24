@@ -2363,11 +2363,14 @@ var WrappedRange = /** @class */ (function () {
      * @param {Node} node
      * @return {Node}
      */
-    WrappedRange.prototype.insertNode = function (node) {
+    WrappedRange.prototype.insertNode = function (node, doNotInsertPara) {
         var rng = this.wrapBodyInlineWithPara().deleteContents();
         var info = dom.splitPoint(rng.getStartPoint(), dom.isInline(node));
         if (info.rightNode) {
             info.rightNode.parentNode.insertBefore(node, info.rightNode);
+            if (dom.isEmpty(info.rightNode) && ((typeof(doNotInsertPara) != "undefined" && doNotInsertPara) || dom.isPara(node))) {
+                info.rightNode.parentNode.removeChild(info.rightNode);
+            }
         }
         else {
             info.container.appendChild(node);
@@ -2381,9 +2384,28 @@ var WrappedRange = /** @class */ (function () {
         var contentsContainer = $$1('<div></div>').html(markup)[0];
         var childNodes = lists.from(contentsContainer.childNodes);
         var rng = this.wrapBodyInlineWithPara().deleteContents();
-        return childNodes.reverse().map(function (childNode) {
-            return rng.insertNode(childNode);
+
+        // If block element is being pasted remove previous <div><br></div>
+        var prev_to_remove = null;
+        if (typeof(childNodes[0]) != "undefined" && !dom.isInline(childNodes[0])) {
+            var rng_nodes = rng.nodes();
+            if (typeof(rng_nodes[0]) != "undefined") {
+                var prev = rng_nodes[0];
+                if (prev && dom.isEmpty(prev) && dom.isPara(prev)) {
+                    prev_to_remove = prev;
+                }
+            }
+        }
+
+        var result = childNodes.reverse().map(function (childNode) {
+            return rng.insertNode(childNode, !dom.isInline(childNode));
         }).reverse();
+
+        if (prev_to_remove) {
+            prev_to_remove.remove();
+        }
+
+        return result;
     };
     /**
      * returns text in range
@@ -3860,7 +3882,7 @@ var Editor = /** @class */ (function () {
             var anchors = [];
             if (isTextChanged) {
                 rng = rng.deleteContents();
-                var anchor = rng.insertNode($$1('<A>' + linkText + '</A>')[0]);
+                var anchor = rng.insertNode($$1('<A></A>').text(linkText)[0]);
                 anchors.push(anchor);
             }
             else {
@@ -4077,7 +4099,8 @@ var Editor = /** @class */ (function () {
      * @return {WrappedRange}
      */
     Editor.prototype.createRange = function () {
-        this.focus();
+        // https://github.com/summernote/summernote/issues/2141#issuecomment-279188124
+        //this.focus();
         return range.create(this.editable);
     };
     /**
@@ -4233,6 +4256,9 @@ var Editor = /** @class */ (function () {
                 }
                 $image.css('width', Math.min(_this.$editable.width(), $image.width()));
             }
+            var alt = src.substring(src.lastIndexOf('/')+1);
+            alt = alt.substring(0, alt.lastIndexOf('?'));
+            $image.attr('alt', alt);
             $image.show();
             range.create(_this.editable).insertNode($image[0]);
             range.createFromNodeAfter($image[0]).select();
@@ -6027,6 +6053,15 @@ var LinkPopover = /** @class */ (function () {
             },
             'summernote.disable summernote.dialog.shown': function () {
                 _this.hide();
+            },
+            'summernote.blur': (we, event) => {
+                if (event.originalEvent && event.originalEvent.relatedTarget) {
+                    if (!this.$popover[0].contains(event.originalEvent.relatedTarget)) {
+                        this.hide();
+                    }
+                } else {
+                    this.hide();
+                }
             }
         };
     }
@@ -6057,7 +6092,7 @@ var LinkPopover = /** @class */ (function () {
         if (rng.isCollapsed() && rng.isOnAnchor()) {
             var anchor = dom.ancestor(rng.sc, dom.isAnchor);
             var href = $$1(anchor).attr('href');
-            this.$popover.find('a').attr('href', href).html(href);
+            this.$popover.find('a').attr('href', href).text(href);
             var pos = dom.posFromPlaceholder(anchor);
             this.$popover.css({
                 display: 'block',

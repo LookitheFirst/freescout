@@ -56,6 +56,7 @@ class Thread extends Model
         //self::TYPE_FORWARDPARENT => 'forwardparent',
         // forwardchild is the type set on the first thread of the new forwarded conversation.
         //self::TYPE_FORWARDCHILD => 'forwardchild',
+        // Not used.
         self::TYPE_CHAT         => 'chat',
     ];
 
@@ -158,6 +159,20 @@ class Thread extends Model
     const META_PREV_CONVERSATION = 'pc';
     const META_MERGED_WITH_CONV = 'mwc';
     const META_MERGED_INTO_CONV = 'mic';
+    const META_FORWARD_PARENT_CONVERSATION_NUMBER = 'fw_pcn';
+    const META_FORWARD_PARENT_CONVERSATION_ID = 'fw_pci';
+    const META_FORWARD_PARENT_THREAD_ID = 'fw_pti';
+    const META_FORWARD_CHILD_CONVERSATION_NUMBER = 'fw_ccn';
+    const META_FORWARD_CHILD_CONVERSATION_ID = 'fw_cci';
+
+    // At some stage metas have been renamed.
+    public static $meta_fw_backward_compat = [
+        self::META_FORWARD_PARENT_CONVERSATION_NUMBER => 'forward_parent_conversation_number',
+        self::META_FORWARD_PARENT_CONVERSATION_ID => 'forward_parent_conversation_id',
+        self::META_FORWARD_PARENT_THREAD_ID => 'forward_parent_thread_id',
+        self::META_FORWARD_CHILD_CONVERSATION_NUMBER => 'forward_child_conversation_number',
+        self::META_FORWARD_CHILD_CONVERSATION_ID => 'forward_child_conversation_id',
+    ];
 
     protected $dates = [
         'opened_at',
@@ -287,13 +302,25 @@ class Thread extends Model
             $body = $this->body;
         }
 
+        if ($body === null) {
+            $body = '';
+        }
+
+        // Change "background:" to "background-color:".
+        // https://github.com/freescout-helpdesk/freescout/issues/2560
+        // Keep in mind that with large texts preg_replace() may return null.
+        $body = preg_replace("/(<[^<>]+style=[\"'][^\"']*)background: *([^;() ]+;)/", '$1background-color:$2', $body) ?: $body;
+
+        // Cut out "collapse" class as it hides elements.
+        $body = preg_replace("/(<[^<>\r\n]+class=([\"'][^\"']* |[\"']))(collapse|hidden)([\"' ])/", '$1$4', $body) ?: $body;
+
         return \Helper::purifyHtml($body);
     }
 
     /**
      * Convert body to plain text.
      */
-    public function getBodyAsText($options = array())
+    public function getBodyAsText($options = ['width' => 0])
     {
         return \Helper::htmlToText($this->body, true, $options);
     }
@@ -304,7 +331,31 @@ class Thread extends Model
             $body = $this->body;
         }
 
-        return \Helper::linkify($this->getCleanBody($body));
+        $body = \Helper::linkify($this->getCleanBody($body));
+
+        // Add target="_blank" to links.
+        $pattern = '/<a(.*?)?href=[\'"]?[\'"]?(.*?)?>/i';
+
+        $body = preg_replace_callback($pattern, function($m){
+            $tpl = array_shift($m);
+            $href = isset($m[1]) ? $m[1] : null;
+
+            if (preg_match('/target=[\'"]?(.*?)[\'"]?/i', $tpl)) {
+                return $tpl;
+            }
+
+            if (trim($href) && 0 === strpos($href, '#')) {
+                // Anchor links.
+                return $tpl;
+            }
+
+            return preg_replace_callback('/href=/i', function($m2){
+                return sprintf('target="_blank" %s', array_shift($m2));
+            }, $tpl);
+
+        }, $body) ?: $body;
+
+        return $body;
     }
 
     /**
@@ -600,11 +651,14 @@ class Thread extends Model
                 if ($conversation_number) {
                     $did_this = __(':person changed the customer to :customer in conversation #:conversation_number', ['customer' => $this->customer->getFullName(true), 'conversation_number' => $conversation_number]);
                 } else {
-                    $customer_name = $this->customer_cached->getFullName(true);
+                    $customer_name = '';
+                    if ($this->customer_cached) {
+                        $customer_name = $this->customer_cached->getFullName(true);
+                    }
                     if ($escape) {
                         $customer_name = htmlspecialchars($customer_name);
                     }
-                    $did_this = __(":person changed the customer to :customer", ['customer' => '<a href="'.$this->customer_cached->url().'" title="'.$this->action_data.'" class="link-black">'.$customer_name.'</a>']);
+                    $did_this = __(":person changed the customer to :customer", ['customer' => '<a href="'.($this->customer_cached ? $this->customer_cached->url() : '').'" title="'.$this->action_data.'" class="link-black">'.$customer_name.'</a>']);
                 }
             } elseif ($this->action_type == self::ACTION_TYPE_DELETED_TICKET) {
                 $did_this = __(":person deleted");
@@ -636,7 +690,7 @@ class Thread extends Model
             }
         } else {
             if ($this->isForwarded()) {
-                $did_this = __(':person forwarded a conversation #:forward_parent_conversation_number', ['forward_parent_conversation_number' => $this->getMeta('forward_parent_conversation_number')]);
+                $did_this = __(':person forwarded a conversation #:forward_parent_conversation_number', ['forward_parent_conversation_number' => $this->getMetaFw(self::META_FORWARD_PARENT_CONVERSATION_NUMBER)]);
             } elseif ($this->first) {
                 $did_this = __(':person started a new conversation #:conversation_number', ['conversation_number' => $conversation_number]);
             } elseif ($this->type == self::TYPE_NOTE) {
@@ -695,6 +749,10 @@ class Thread extends Model
     {
         $this->deteleAttachments();
         $this->delete();
+
+        if ($this->isNote()) {
+            Conversation::updatePreview($this->conversation_id);
+        }
     }
 
     /**
@@ -733,7 +791,11 @@ class Thread extends Model
     {
         // Created by customer
         if ($this->source_via == self::PERSON_CUSTOMER) {
-            return $this->getCreatedBy()->getFirstName(true);
+            if ($this->getCreatedBy()) {
+                return $this->getCreatedBy()->getFirstName(true);
+            } else {
+                return '';
+            }
         }
 
         // Created by user
@@ -1001,12 +1063,19 @@ class Thread extends Model
                         }
                     } else {
                         // URL.
-                        $uploaded_file = \Helper::downloadRemoteFileAsTmpFile($attachment['file_url']);
-                        if (!$uploaded_file) {
+                        $file_path = \Helper::downloadRemoteFileAsTmp($attachment['file_url']);
+                        if (!$file_path) {
                             continue;
                         }
+                        $uploaded_file = new \Illuminate\Http\UploadedFile(
+                            $file_path, basename($file_path),
+                            null, null, true
+                        );
                         if (empty($attachment['mime_type'])) {
-                            $attachment['mime_type'] = $uploaded_file->getClientMimeType();
+                            $attachment['mime_type'] = mime_content_type($file_path);
+                            if (empty($attachment['mime_type'])) {
+                                $attachment['mime_type'] = $uploaded_file->getMimeType();
+                            }
                         }
                     }
                 }
@@ -1018,7 +1087,7 @@ class Thread extends Model
                     $attachment['mime_type'],
                     null,
                     $content,
-                    $uploaded_file = $uploaded_file,
+                    $uploaded_file,
                     $embedded = false,
                     $thread->id,
                     $user_id ?? null
@@ -1032,6 +1101,10 @@ class Thread extends Model
                 $thread->has_attachments = true;
                 $conversation->has_attachments = true;
             }
+        } else {
+            $has_attachments = $data['has_attachments'] ?? false;
+            $thread->has_attachments = $has_attachments;
+            $conversation->has_attachments = $has_attachments;
         }
         
         $thread->save();
@@ -1227,6 +1300,15 @@ class Thread extends Model
         $this->setMetas($metas);
     }
 
+    public function getMetaFw($key, $default = null)
+    {
+        $meta = $this->getMeta($key, $default);
+        if (!$meta) {
+            $meta = $this->getMeta(self::$meta_fw_backward_compat[$key], $default);
+        }
+        return $meta;
+    }
+
     /**
      * Unset thread meta value.
      */
@@ -1269,7 +1351,7 @@ class Thread extends Model
      */
     public function isForwarded()
     {
-        if ($this->getMeta('forward_parent_conversation_id')) {
+        if ($this->getMetaFw(self::META_FORWARD_PARENT_CONVERSATION_ID)) {
             return true;
         } else {
             return false;
@@ -1289,7 +1371,7 @@ class Thread extends Model
      */
     public function getForwardParentConversation()
     {
-        return Conversation::where('id', $this->getMeta('forward_parent_conversation_id'))
+        return Conversation::where('id', $this->getMetaFw(self::META_FORWARD_PARENT_CONVERSATION_ID))
             ->rememberForever()
             ->first();
     }
@@ -1299,7 +1381,7 @@ class Thread extends Model
      */
     public function getForwardChildConversation()
     {
-        return Conversation::where('id', $this->getMeta('forward_child_conversation_id'))
+        return Conversation::where('id', $this->getMetaFw(self::META_FORWARD_CHILD_CONVERSATION_ID))
             ->first();
     }
 
@@ -1308,7 +1390,7 @@ class Thread extends Model
      */
     public function fetchBody()
     {
-        $message = \MailHelper::fetchMessage($this->conversation->mailbox, $this->message_id);
+        $message = \MailHelper::fetchMessage($this->conversation->mailbox, $this->message_id, $this->getMailDate());
 
         if (!$message) {
             return '';
@@ -1323,6 +1405,22 @@ class Thread extends Model
         return $body;
     }
 
+    public function parseHeaders()
+    {
+        return \MailHelper::parseHeaders($this->headers);
+    }
+
+    public function getMailDate()
+    {
+        $data = $this->parseHeaders();
+
+        if (empty($data->date)) {
+            return null;
+        }
+
+        return \Helper::parseDateToCarbon($data->date);
+    }
+
     public function getActionTypeName()
     {
         if (!$this->action_type) {
@@ -1332,5 +1430,91 @@ class Thread extends Model
         $action_types = \Eventy::filter('thread.action_types', self::$action_types);
 
         return self::$action_types[$this->action_type] ?? '';
+    }
+
+    public function isCustomerMessage()
+    {
+        return $this->type == self::TYPE_CUSTOMER;
+    }
+
+    public function isUserMessage()
+    {
+        return $this->type == self::TYPE_MESSAGE;
+    }
+
+    public static function replaceBase64ImagesWithAttachments($body, $user_id = null)
+    {
+        \Helper::setPcreBacktrackLimit();
+
+        $body = preg_replace_callback("#(<img[^<>]+src=[\"'])data:image/([^;]+);base64,([^\"']+)([\"'])#",
+            function ($match) {
+                $attachment = null;
+                $data = base64_decode($match[3]);
+
+                if ($data) {
+                    $attachment = Attachment::create(
+                        $file_name = number_format(microtime(true), 4, '', '').'.'.$match[2],
+                        $mime_type = 'image/'.$match[2],
+                        $type = Attachment::TYPE_IMAGE,
+                        $data,
+                        $uploaded_file = null,
+                        $embedded = true,
+                        $thread_id = null,
+                        $user_id = \Auth::id()
+                    );
+                }
+                if ($attachment) {
+                    return $match[1].$attachment->url().$match[4];
+                } else {
+                    return $match[0];
+                }
+            }, $body
+        );
+
+        return $body;
+    }
+
+    public function getMessageId($mailbox = null)
+    {
+        if ($this->isCustomerMessage() && $this->message_id) {
+            return $this->message_id;
+        }
+        if ($this->isUserMessage()) {
+            if (!$mailbox) {
+                $mailbox = $this->conversation->mailbox;
+            }
+            return \MailHelper::MESSAGE_ID_PREFIX_REPLY_TO_CUSTOMER.'-'.$this->id.'-'.\MailHelper::getMessageIdHash($this->id).'@'.$mailbox->getEmailDomain();
+        }
+
+        return '';
+    }
+
+    // Sorts threads in desc order by created_at and ID.
+    // 
+    // Threads has to be sorted by created_at and not by id.
+    // https://github.com/freescout-helpdesk/freescout/issues/2938
+    // Sometimes thread.created_at may be the same,
+    // in such cases we also need to sort by thread ID.
+    public static function sortThreads($threads)
+    {
+        return $threads->sort(function ($a, $b) {
+            $a_ts = $a->created_at->getTimestamp();
+            $b_ts = $b->created_at->getTimestamp();
+            if ($a_ts == $b_ts) {
+                if ($a->id < $b->id) {
+                    return 1;
+                } else {
+                    return -1;
+                }
+            } else {
+                return ($a_ts < $b_ts) ? 1 : -1;
+            }
+        });
+    }
+
+    public static function getLastThread($threads)
+    {
+        $threads = self::sortThreads($threads);
+        return $threads->first();
     }
 }

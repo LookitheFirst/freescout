@@ -24,6 +24,14 @@ class SendAutoReply implements ShouldQueue
     public $customer;
 
     /**
+     * The number of seconds the job can run before timing out.
+     * fwrite() function in /vendor/swiftmailer/swiftmailer/lib/classes/Swift/Transport/StreamBuffer.php
+     * in some cases may stuck and continue infinitely. This blocks queue:work and no other jobs are processed.
+     * So we need to set the timeout. On timeout the whole queue:work process is being killed by Laravel.
+     */
+    public $timeout = 120;
+
+    /**
      * Create a new job instance.
      *
      * @return void
@@ -43,6 +51,11 @@ class SendAutoReply implements ShouldQueue
      */
     public function handle()
     {
+        // Auto reply disabled.
+        if (!empty($this->conversation->meta['ar_off'])) {
+            return;
+        }
+
         // Configure mail driver according to Mailbox settings
         \App\Misc\Mail::setMailDriver($this->mailbox, null, $this->conversation);
 
@@ -51,7 +64,7 @@ class SendAutoReply implements ShouldQueue
         $headers['References'] = '<'.$this->thread->message_id.'>';
 
         // Create Message-ID for the auto reply
-        $message_id = \App\Misc\Mail::MESSAGE_ID_PREFIX_AUTO_REPLY.'-'.$this->thread->id.'-'.md5($this->thread->id).'@'.$this->mailbox->getEmailDomain();
+        $message_id = \App\Misc\Mail::MESSAGE_ID_PREFIX_AUTO_REPLY.'-'.$this->thread->id.'-'.\MailHelper::getMessageIdHash($this->thread->id).'@'.$this->mailbox->getEmailDomain();
         $headers['Message-ID'] = $message_id;
 
         $customer_email = $this->conversation->customer_email;

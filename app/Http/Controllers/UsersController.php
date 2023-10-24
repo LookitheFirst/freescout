@@ -98,9 +98,12 @@ class UsersController extends Controller
             // Set some random password before sending invite
             $user->password = Hash::make($user->generateRandomPassword());
         }
+        // Set system timezone.
+        $user->timezone = config('app.timezone') ?: User::DEFAULT_TIMEZONE;
+        $user = \Eventy::filter('user.create_save', $user, $request);
         $user->save();
 
-        $user->mailboxes()->sync($request->mailboxes);
+        $user->mailboxes()->sync($request->mailboxes ?: []);
         $user->syncPersonalFolders($request->mailboxes);
 
         // Send invite
@@ -109,7 +112,7 @@ class UsersController extends Controller
                 $user->sendInvite(true);
             } catch (\Exception $e) {
                 // Admin is allowed to see exceptions
-                \Session::flash('flash_error_floating', $e->getMessage());
+                \Session::flash('flash_error_floating', $e->getMessage().' — '.__('Check mail settings in "Manage » Settings » Mail Settings"'));
             }
         }
 
@@ -184,7 +187,7 @@ class UsersController extends Controller
                     $user->photo_url = $path_url;
                 } else {
                     $invalid = true;
-                    $validator->errors()->add('photo_url', __('Error occured processing the image. Make sure that PHP GD extension is enabled.'));
+                    $validator->errors()->add('photo_url', __('Error occurred processing the image. Make sure that PHP GD extension is enabled.'));
                 }
             }
 
@@ -229,11 +232,13 @@ class UsersController extends Controller
                 $request_data['status'] = User::STATUS_ACTIVE;
             }
         }
-        $user->fill($request_data);
+        $user->setData($request_data);
 
         if (empty($request->input('enable_kb_shortcuts'))) {
             $user->enable_kb_shortcuts = false;
         }
+
+        $user = \Eventy::filter('user.save_profile', $user, $request);
 
         $user->save();
 
@@ -281,7 +286,7 @@ class UsersController extends Controller
 
         $user = User::findOrFail($id);
 
-        $user->mailboxes()->sync($request->mailboxes);
+        $user->mailboxes()->sync($request->mailboxes ?: []);
         $user->syncPersonalFolders($request->mailboxes);
 
         // Save permissions.
@@ -385,8 +390,8 @@ class UsersController extends Controller
 
                         $response['status'] = 'success';
                     } catch (\Exception $e) {
-                        // Admin is allowed to see exceptions
-                        $response['msg'] = $e->getMessage();
+                        // Admin is allowed to see exceptions.
+                        $response['msg'] = $e->getMessage().' — '.__('Check mail settings in "Manage » Settings » Mail Settings"');
                     }
                 }
                 break;
@@ -493,30 +498,42 @@ class UsersController extends Controller
 
                     $user->conversations->each(function ($conversation) use ($auth_user, $request) {
                         // We don't fire ConversationUserChanged event to avoid sending notifications to users
-                        if (!empty($request->assign_user) && !empty($request->assign_user[$conversation->mailbox_id]) && (int) $request->assign_user[$conversation->mailbox_id] != -1) {
+                        if (!empty($request->assign_user) 
+                            && !empty($request->assign_user[$conversation->mailbox_id]) 
+                            && (int) $request->assign_user[$conversation->mailbox_id] != -1
+                        ) {
                             // Set assignee.
+                            // In this case conversation stays assigned, just assignee changes.
                             $conversation->user_id = $request->assign_user[$conversation->mailbox_id];
-                        // In this case conversation stays assigned, just assignee changes.
+
                         } else {
-                            // Set assignee.
+
+                            // Make convesation Unassigned.
+                            
+                            // Unset assignee.
+                            // Maybe use changeUser() here.
                             $conversation->user_id = null;
 
-                            // Change conversation folder to ANASSIGNED.
-                            $folder_id = null;
-                            if (!empty($mailbox_unassigned_folders[$conversation->mailbox_id])) {
-                                $folder_id = $mailbox_unassigned_folders[$conversation->mailbox_id];
-                            } else {
-                                $folder = $conversation->mailbox->folders()
-                                    ->where('type', Folder::TYPE_UNASSIGNED)
-                                    ->first();
+                            if ($conversation->isPublished()
+                                && ($conversation->isActive() || $conversation->isPending())
+                            ) {
+                                // Change conversation folder to UNASSIGNED.
+                                $folder_id = null;
+                                if (!empty($mailbox_unassigned_folders[$conversation->mailbox_id])) {
+                                    $folder_id = $mailbox_unassigned_folders[$conversation->mailbox_id];
+                                } else {
+                                    $folder = $conversation->mailbox->folders()
+                                        ->where('type', Folder::TYPE_UNASSIGNED)
+                                        ->first();
 
-                                if ($folder) {
-                                    $folder_id = $folder->id;
-                                    $mailbox_unassigned_folders[$conversation->mailbox_id] = $folder_id;
+                                    if ($folder) {
+                                        $folder_id = $folder->id;
+                                        $mailbox_unassigned_folders[$conversation->mailbox_id] = $folder_id;
+                                    }
                                 }
-                            }
-                            if ($folder_id) {
-                                $conversation->folder_id = $folder_id;
+                                if ($folder_id) {
+                                    $conversation->folder_id = $folder_id;
+                                }
                             }
                         }
 
@@ -555,7 +572,7 @@ class UsersController extends Controller
 
                     $user->status = \App\User::STATUS_DELETED;
                     // Update email.
-                    $email_suffix = '_deleted'.date('YmdHis');
+                    $email_suffix = User::EMAIL_DELETED_SUFFIX.date('YmdHis');
                     // We have to truncate email to avoid "Data too long" error.
                     $user->email = mb_substr($user->email, 0, User::EMAIL_MAX_LENGTH - mb_strlen($email_suffix)).$email_suffix;
 
@@ -575,7 +592,7 @@ class UsersController extends Controller
         }
 
         if ($response['status'] == 'error' && empty($response['msg'])) {
-            $response['msg'] = 'Unknown error occured';
+            $response['msg'] = 'Unknown error occurred';
         }
 
         return \Response::json($response);

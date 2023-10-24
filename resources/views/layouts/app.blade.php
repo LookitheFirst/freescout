@@ -8,16 +8,16 @@
     
     <!-- CSRF Token -->
     <meta name="csrf-token" content="{{ csrf_token() }}">
+    {!! \Helper::cspMetaTag() !!}
 
     <title>@if ($__env->yieldContent('title_full'))@yield('title_full') @elseif ($__env->yieldContent('title'))@yield('title') - {{ config('app.name', 'FreeScout') }} @else{{ config('app.name', 'FreeScout') }}@endif</title>
 
-    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
-    {{--<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">--}}
-    <link rel="manifest" href="/site.webmanifest">
-    <link rel="mask-icon" href="/safari-pinned-tab.svg" color="#5bbad5">
+    <link rel="apple-touch-icon" sizes="180x180" href="{{ asset('apple-touch-icon.png') }}">
+    <link rel="shortcut icon" type="image/x-icon" href="@filter('layout.favicon', URL::asset('favicon.ico'))">
+    <link rel="manifest" href="{{ asset('site.webmanifest') }}" crossorigin="use-credentials">
+    <link rel="mask-icon" href="{{ asset('safari-pinned-tab.svg') }}" color="#5bbad5">
     <meta name="msapplication-TileColor" content="#da532c">
-    <meta name="theme-color" content="#ffffff">
+    <meta name="theme-color" content="@filter('layout.theme_color', '#ffffff')">
     @action('layout.head')
     {{-- Styles --}}
     {{-- Conversation page must open immediately, so we are loading scripts present on conversation page --}}
@@ -40,7 +40,7 @@
 
     @yield('stylesheets')
 </head>
-<body class="locale-{{ app()->getLocale() }} @if (Helper::isLocaleRtl()) rtl @endif @if (!Auth::user()) user-is-guest @endif @if (Auth::user() && Auth::user()->isAdmin()) user-is-admin @endif @yield('body_class')" @yield('body_attrs') @if (Auth::user()) data-auth_user_id="{{ Auth::user()->id }}" @endif>
+<body class="locale-{{ app()->getLocale() }} @if (Helper::isLocaleRtl()) rtl @endif @if (!Auth::user()) user-is-guest @endif @if (Auth::user() && Auth::user()->isAdmin()) user-is-admin @endif @yield('body_class') @action('body.class')" @yield('body_attrs') @if (Auth::user()) data-auth_user_id="{{ Auth::user()->id }}" @endif>
 <div id="app">
 
         @if (Auth::user() && empty(app('request')->x_embed) && empty($__env->yieldContent('guest_mode')))
@@ -49,7 +49,6 @@
                 <div class="container">
                     <div class="navbar-header">
 
-                        <!-- Collapsed Hamburger -->
                         <button type="button" class="navbar-toggle collapsed" data-toggle="collapse" data-target="#app-navbar-collapse" aria-expanded="false">
                             <span class="sr-only">{{ __('Toggle Navigation') }}</span>
                             <span class="icon-bar"></span>
@@ -57,28 +56,25 @@
                             <span class="icon-bar"></span>
                         </button>
 
-                        <!-- Branding Image -->
                         @if (\Helper::isInApp() && \Helper::isRoute('conversations.view'))
-                            <a class="navbar-brand" href="javascript: goBack(); void(0);" title="{{ __('Back') }}">
+                            <a class="navbar-brand" id="navbar-back" href="#" title="{{ __('Back') }}">
                                 <i class="glyphicon glyphicon-arrow-left"></i>
                             </a>
                         @else
                             <a class="navbar-brand" href="{{ route('dashboard') }}" title="{{ __('Dashboard') }}">
                                 <img src="@filter('layout.header_logo', asset('img/logo-brand.svg'))" height="100%" alt="" />
-                                {{-- config('app.name', 'FreeScout') --}}
                             </a>
                         @endif
                     </div>
 
                     <div class="collapse navbar-collapse" id="app-navbar-collapse">
-                        <!-- Left Side Of Navbar -->
                         <ul class="nav navbar-nav">
                             @php
                                 $mailboxes = Auth::user()->mailboxesCanView(true);
                                 $mailboxes = \Eventy::filter('menu.mailboxes', $mailboxes);
                             @endphp
                             @if (count($mailboxes) == 1)
-                                <li class="{{ \App\Misc\Helper::menuSelectedHtml('mailbox') }}"><a href="{{ \Eventy::filter('mailbox.url', route('mailboxes.view', ['id'=>$mailboxes[0]->id]), $mailboxes[0]) }}">{{ __('Mailbox') }}</a></li>
+                                <li class="{{ \App\Misc\Helper::menuSelectedHtml('mailbox') }}"><a href="{{ \Eventy::filter('mailbox.url', route('mailboxes.view', ['id'=>$mailboxes[0]->id]), $mailboxes[0]) }}">@action('menu.mailbox_single.before_name', $mailboxes[0]){{ __('Mailbox') }}@action('menu.mailbox_single.after_name', $mailboxes[0])</a></li>
                             @elseif (count($mailboxes) > 1)
                                 <li class="dropdown {{ \App\Misc\Helper::menuSelectedHtml('mailbox') }}">
                                     <a href="#" class="dropdown-toggle" data-toggle="dropdown" role="button" aria-expanded="false" aria-haspopup="true" v-pre>
@@ -86,7 +82,7 @@
                                     </a>
                                     <ul class="dropdown-menu dm-scrollable">
                                         @foreach ($mailboxes as $mailbox_item)
-                                            <li @if ($mailbox_item->id == app('request')->id)class="active"@endif><a href="{{ \Eventy::filter('mailbox.url', route('mailboxes.view', ['id' => $mailbox_item->id]), $mailbox_item) }}">{{ $mailbox_item->name }}</a></li>
+                                            <li @if ($mailbox_item->id == app('request')->id)class="active"@endif><a href="{{ \Eventy::filter('mailbox.url', route('mailboxes.view', ['id' => $mailbox_item->id]), $mailbox_item) }}">@action('menu.mailbox.before_name', $mailbox_item){{ $mailbox_item->name }}@action('menu.mailbox.after_name', $mailbox_item)</a></li>
                                         @endforeach
                                     </ul>
                                 </li>
@@ -184,7 +180,7 @@
                                 <li class="dropdown">
 
                                     <a href="#" class="dropdown-toggle dropdown-toggle-icon dropdown-toggle-account" data-toggle="dropdown" role="button" aria-expanded="false" aria-haspopup="true" v-pre title="{{ __('Account') }}" aria-label="{{ __('Account') }}">
-                                        <span class="photo-sm">@include('partials/person_photo', ['person' => Auth::user()])</span>&nbsp;<span class="nav-user">{{ Auth::user()->first_name }}</span> <span class="caret"></span>
+                                        <span class="photo-sm">@include('partials/person_photo', ['person' => Auth::user()])</span>&nbsp;<span class="nav-user">{{ Auth::user()->first_name }}@action('menu.user.name_append', Auth::user())</span> <span class="caret"></span>
                                     </a>
 
                                     <ul class="dropdown-menu">
@@ -192,9 +188,7 @@
                                         @action('menu_right.user.after_profile')
                                         <li class="divider"></li>
                                         <li>
-                                            <a href="{{ route('logout') }}"
-                                                onclick="event.preventDefault();
-                                                         document.getElementById('logout-form').submit();">
+                                            <a href="#" id="logout-link">
                                                 {{ __('Log Out') }}
                                             </a>
 
@@ -204,7 +198,7 @@
                                         </li>
                                         <li class="divider hidden in-app-switcher"></li>
                                         <li>
-                                            <a href="javascript:switchHelpdeskUrl();void(0);" class="hidden in-app-switcher">{{ __('Switch Helpdesk URL') }}</a>
+                                            <a href="#" class="hidden in-app-switcher">{{ __('Switch Helpdesk URL') }}</a>
                                         </li>
                                     </ul>
                                 </li>
@@ -263,7 +257,7 @@
                     {!! \Eventy::filter('footer.text', '') !!}
                 @endif
                 @if (!Auth::user())
-                    <a href="javascript:switchHelpdeskUrl();void(0);" class="hidden in-app-switcher"><br/>{{ __('Switch Helpdesk URL') }}</a>
+                    <a href="#" class="hidden in-app-switcher"><br/>{{ __('Switch Helpdesk URL') }}</a>
                 @endif
                 {{-- Show version to admin only --}}
                 @if (Auth::user() && Auth::user()->isAdmin())
@@ -297,7 +291,7 @@
         }
     @endphp
     @yield('javascripts')
-    <script type="text/javascript">
+    <script type="text/javascript" {!! \Helper::cspNonceAttr() !!}>
         @if (\Helper::isInApp())
             @if (Auth::user())
                 fs_in_app_data['token'] = '{{ Auth::user()->getAuthToken() }}';
@@ -306,7 +300,7 @@
             @endif
         @endif
         @yield('javascript')
-        @action('javascript')
+        @action('javascript', $__env->yieldContent('javascripts'))
     </script>
 </body>
 </html>

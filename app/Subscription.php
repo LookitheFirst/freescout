@@ -67,9 +67,9 @@ class Subscription extends Model
     ];
 
     /**
-     * List of events that occured.
+     * List of events that occurred.
      */
-    public static $occured_events = [];
+    public static $occurred_events = [];
 
     public $timestamps = false;
 
@@ -158,7 +158,18 @@ class Subscription extends Model
      */
     public static function usersToNotify($event_type, $conversation, $threads, $mailbox_user_ids = null)
     {
-        $thread = $threads[0];
+        $users_to_notify = [];
+        $thread = null;
+
+        if (isset($threads[0])) {
+            $thread = $threads[0];
+        } elseif (count($threads)) {
+            $thread = array_shift(array_values($threads));
+        }
+
+        if (!$thread) {
+            return $users_to_notify;
+        }
 
         // Ignore imported threads.
         if ($thread->imported) {
@@ -239,11 +250,13 @@ class Subscription extends Model
             ->whereIn('event', $events)
             ->get();
 
+        $subscriptions = \Eventy::filter('subscription.subscriptions', $subscriptions, $conversation, $events, $thread);
+
         // Filter subscribers
-        $users_to_notify = [];
         foreach ($subscriptions as $i => $subscription) {
             // Actions on conversation where user is assignee
-            if (in_array($subscription->event, [self::EVENT_CONVERSATION_ASSIGNED_TO_ME, self::EVENT_CUSTOMER_REPLIED_TO_MY, self::EVENT_USER_REPLIED_TO_MY]) && $conversation->user_id != $subscription->user_id
+            if (in_array($subscription->event, [self::EVENT_CONVERSATION_ASSIGNED_TO_ME, self::EVENT_CUSTOMER_REPLIED_TO_MY, self::EVENT_USER_REPLIED_TO_MY]) 
+                && ($conversation->user_id != $subscription->user_id && !\Eventy::filter('subscription.is_user_assignee', false, $subscription, $conversation))
             ) {
                 continue;
             }
@@ -256,19 +269,19 @@ class Subscription extends Model
             }
 
             // Skip if user muted notifications for this mailbox
-            if ($subscription->user->isAdmin()) {
+            //if ($subscription->user->isAdmin()) {
 
-                // Mute notifications for events not related directly to the user.
-                if (!in_array($subscription->event, [self::EVENT_CONVERSATION_ASSIGNED_TO_ME, self::EVENT_FOLLOWED_CONVERSATION_UPDATED, self::EVENT_CUSTOMER_REPLIED_TO_MY, self::EVENT_USER_REPLIED_TO_MY])
-                    && !\Eventy::filter('subscription.is_related_to_user', false, $subscription, $thread)
-                ) {
-                    $mailbox_settings = $conversation->mailbox->getUserSettings($subscription->user_id);
+            // Mute notifications for events not related directly to the user.
+            if (!in_array($subscription->event, [self::EVENT_CONVERSATION_ASSIGNED_TO_ME, self::EVENT_FOLLOWED_CONVERSATION_UPDATED, self::EVENT_CUSTOMER_REPLIED_TO_MY, self::EVENT_USER_REPLIED_TO_MY])
+                && !\Eventy::filter('subscription.is_related_to_user', false, $subscription, $thread)
+            ) {
+                $mailbox_settings = $conversation->mailbox->getUserSettings($subscription->user_id);
 
-                    if (!empty($mailbox_settings->mute)) {
-                        continue;
-                    }
+                if (!empty($mailbox_settings->mute)) {
+                    continue;
                 }
             }
+            //}
 
             if (\Eventy::filter('subscription.filter_out', false, $subscription, $thread)) {
                 continue;
@@ -285,7 +298,7 @@ class Subscription extends Model
     }
 
     /**
-     * Process events which occured.
+     * Process events which occurred.
      */
     public static function processEvents()
     {
@@ -294,7 +307,7 @@ class Subscription extends Model
         $delay = now()->addSeconds(Conversation::UNDO_TIMOUT);
 
         // Collect into notify array information about all users who need to be notified
-        foreach (self::$occured_events as $event) {
+        foreach (self::$occurred_events as $event) {
             // Get mailbox users ids
             $mailbox_user_ids = [];
             foreach (self::$mediums as $medium) {
@@ -316,7 +329,7 @@ class Subscription extends Model
                     $threads = $event['conversation']->getThreads();
                     break;
                 } else {
-                    $users = $notify[$medium][$event['conversation']->id]['users'];
+                    $users[$medium] = $notify[$medium][$event['conversation']->id]['users'];
                     $threads = $notify[$medium][$event['conversation']->id]['threads'];
                 }
             }
@@ -338,8 +351,9 @@ class Subscription extends Model
 
                 if (count($medium_users_to_notify)) {
                     $notify[$medium][$event['conversation']->id] = [
-                        // Users subarray contains all users who need to receive notification for all events
-                        'users'            => array_unique(array_merge($users, $medium_users_to_notify)),
+                        // Users subarray contains all users who need to receive notification
+                        // for all events for the media.
+                        'users'            => array_unique(array_merge($users[$medium] ?? [], $medium_users_to_notify)),
                         'conversation'     => $event['conversation'],
                         'threads'          => $threads,
                         'mailbox_user_ids' => $mailbox_user_ids,
@@ -357,10 +371,17 @@ class Subscription extends Model
             }
         }
 
-        // - Menu notification (uses same medium as for email)
-        if (!empty($notify[self::MEDIUM_EMAIL]) || !empty($notify[self::MEDIUM_MENU])) {
-
-            $notify_menu = ($notify[self::MEDIUM_EMAIL] ?? []) + ($notify[self::MEDIUM_MENU] ?? []);
+        // - Menu notification (uses same medium as for Email, if email notifications are disabled - use Browser notificaitons)
+        if (!empty($notify[self::MEDIUM_EMAIL]) 
+            || !empty($notify[self::MEDIUM_BROWSER])
+            || !empty($notify[self::MEDIUM_MENU])
+        ) {
+            if (!empty($notify[self::MEDIUM_EMAIL])) {
+                $notify_menu = $notify[self::MEDIUM_EMAIL] ?? [];
+            } else {
+                $notify_menu = $notify[self::MEDIUM_BROWSER] ?? [];
+            }
+            $notify_menu = $notify_menu + ($notify[self::MEDIUM_MENU] ?? []);
             foreach ($notify_menu as $notify_info) {
                 $website_notification = new WebsiteNotification($notify_info['conversation'], self::chooseThread($notify_info['threads']));
                 $website_notification->delay($delay);
@@ -402,7 +423,7 @@ class Subscription extends Model
         // - Mobile
         \Eventy::action('subscription.process_events', $notify);
 
-        self::$occured_events = [];
+        self::$occurred_events = [];
     }
 
     /**
@@ -429,7 +450,7 @@ class Subscription extends Model
      */
     public static function registerEvent($event_type, $conversation, $caused_by_user_id, $process_now = false)
     {
-        self::$occured_events[] = [
+        self::$occurred_events[] = [
             'event_type'        => $event_type,
             'conversation'      => $conversation,
             'caused_by_user_id' => $caused_by_user_id,
@@ -437,7 +458,7 @@ class Subscription extends Model
 
         // Automatically add EVENT_TYPE_UPDATED
         if (!in_array($event_type, [self::EVENT_TYPE_UPDATED, self::EVENT_TYPE_NEW])) {
-            self::$occured_events[] = [
+            self::$occurred_events[] = [
                 'event_type'        => self::EVENT_TYPE_UPDATED,
                 'conversation'      => $conversation,
                 'caused_by_user_id' => $caused_by_user_id,

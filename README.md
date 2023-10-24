@@ -9,13 +9,15 @@
 
 </div>
 
-**FreeScout** is the super lightweight free open source help desk and shared inbox written in PHP7+ (Laravel framework) – self hosted clone of HelpScout. Now you can enjoy free Zendesk & Help Scout without giving up privacy or locking yourself into a service you don't control. FreeScout has been developed from scratch and is not using any copyrighted Help Scout or Zendesk materials.
+**FreeScout** is the super lightweight and powerful free open source help desk and shared inbox built with PHP (Laravel framework). Now you can enjoy free Zendesk & Help Scout without giving up privacy or locking yourself into a service you don't control. FreeScout has been developed from scratch and is not using any copyrighted Help Scout or Zendesk materials.
+
+If you want to support the project feel free to **star this repository**. It helps to increase the visibility of the project and let people know that it is valuable. Thanks for your support!
 
 ![FreeScout](https://freescout-helpdesk.github.io/img/screenshots/screenshot.png)
 
 ## Table of Contents
-   * [Features](#features)
    * [Demo](#demo)
+   * [Features](#features)
    * [Mobile Apps](#mobile-apps)
    * [Requirements](#requirements)
    * [Installation](#installation)
@@ -26,12 +28,17 @@
    * [Contributing](#contributing)
    * [Screenshots](#screenshots)
 
+## Demo
+
+**[Live Demo](https://demo.freescout.net)**
+
 ## Features
 
   * No limitations on the number of users, tickets, mailboxes, etc.
   * 100% Mobile-friendly.
-  * Multilingual (English, Croatian, Danish, Dutch, French, German, Japanese, Italian, Persian, Polish, Portuguese, Russian, Spanish, Slovak, Swedish).
+  * Multilingual: English, Chinese, Croatian, Czech, Danish, Dutch, Finnish, French, German, Italian, Japanese, Korean, Norwegian, Persian, Polish, Portuguese, Russian, Spanish, Slovak, Swedish.
   * Seamless email integration.
+  * Supports modern Microsoft Exchange authentication.
   * Web installer & updater.
   * Starred conversations.
   * Forwarding conversations.
@@ -44,6 +51,7 @@
   * Following a conversation.
   * Auto reply.
   * Internal notes.
+  * Automatic refreshing of the conversations list without the need to reload the page.
   * Pasting screenshots from the clipboard into the reply area.
   * Configuring notifications on a per user basis.
   * Open tracking.
@@ -51,10 +59,6 @@
   * Search.
 
 Need anything else? Suggest features [here](https://freescout.net/request-feature/).
-
-## Demo
-
-**[Live Demo](https://demo.freescout.net)**
 
 ## Mobile Apps
 
@@ -67,8 +71,10 @@ Mobile apps support the same functionality and modules as the web version of you
 FreeScout is a pure PHP/MySQL application, so it can be easily deployed even on a shared hosting.
 
   * Nginx / Apache / IIS
-  * PHP 7.1 - 8.1
+  * PHP 7.1 - 8.2
   * MySQL 5.0+ / MariaDB 5.0+ / PostgreSQL
+
+There is no minimum system requirements (CPU / RAM) – FreeScout will run on any system.
 
 ## Installation
 
@@ -96,11 +102,13 @@ Images & one-click installs:
   * [API](https://api-docs.freescout.net/)
   * [Migrate to FreeScout](http://freescout.net/migrate/) (from any help desk)
   * [Zapier](https://freescout.net/zapier/)
-  * [Integromat](https://freescout.net/integromat/)
+  * [Make](https://freescout.net/make-integration/) (Integromat)
 
 ## News & Updates
 
-If you would like to be notified about important news and updates you can subscribe [here](https://freescout.net/subscribe/)
+Don't miss news, updates and new modules!
+
+[Email Newsletter](https://freescout.net/subscribe/) | [Facebook](https://freescout.net/facebook/) | [Twitter](https://freescout.net/twitter/) | [YouTube](https://freescout.net/youtube/) | [RSS](https://freescout.net/feed/)
 
 ## Contributing
 

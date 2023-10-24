@@ -39,6 +39,8 @@ class Mail
     const MAIL_ENCRYPTION_TLS = 'tls';
 
     const FETCH_SCHEDULE_EVERY_MINUTE = 1;
+    const FETCH_SCHEDULE_EVERY_TWO_MINUTES = 2;
+    const FETCH_SCHEDULE_EVERY_THREE_MINUTES = 3;
     const FETCH_SCHEDULE_EVERY_FIVE_MINUTES = 5;
     const FETCH_SCHEDULE_EVERY_TEN_MINUTES = 10;
     const FETCH_SCHEDULE_EVERY_FIFTEEN_MINUTES = 15;
@@ -72,12 +74,18 @@ class Mail
         '<!-- originalMessage -->',
         '‐‐‐‐‐‐‐ Original Message ‐‐‐‐‐‐‐',
         '--------------- Original Message ---------------',
+        '-------- Αρχικό μήνυμα --------', // Greek
     ];
 
     /**
      * md5 of the last applied mail config.
      */
     public static $last_mail_config_hash = '';
+
+    /**
+     * Used to get SMTP queue id when sending emails to customers.
+     */
+    public static $smtp_queue_id_plugin_registered = false;
 
     /**
      * Configure mail sending parameters.
@@ -139,6 +147,8 @@ class Mail
         // We have to update Mailer facade manually, as it does not happen automatically
         // and previous instance of app('mailer') is used.
         \Mail::swap(app('mailer'));
+
+        \Eventy::action('mail.reapply_mail_config');
     }
 
     /**
@@ -174,7 +184,7 @@ class Mail
     /**
      * Replace mail vars in the text.
      */
-    public static function replaceMailVars($text, $data = [], $escape = false)
+    public static function replaceMailVars($text, $data = [], $escape = false, $remove_non_replaced = false)
     {
         // Available variables to insert into email in UI.
         $vars = [];
@@ -187,12 +197,18 @@ class Mail
         if (!empty($data['mailbox'])) {
             $vars['{%mailbox.email%}'] = $data['mailbox']->email;
             $vars['{%mailbox.name%}'] = $data['mailbox']->name;
-            $vars['{%mailbox.fromName%}'] = $data['mailbox']->getMailFrom(!empty($data['user']) ? $data['user'] : null)['name'];
+            // To avoid recursion.
+            if (isset($data['mailbox_from_name'])) {
+                $vars['{%mailbox.fromName%}'] = $data['mailbox_from_name'];
+            } else {
+                $vars['{%mailbox.fromName%}'] = $data['mailbox']->getMailFrom(!empty($data['user']) ? $data['user'] : null)['name'];
+            }
         }
         if (!empty($data['customer'])) {
             $vars['{%customer.fullName%}'] = $data['customer']->getFullName(true);
             $vars['{%customer.firstName%}'] = $data['customer']->getFirstName(true);
             $vars['{%customer.lastName%}'] = $data['customer']->last_name;
+            $vars['{%customer.company%}'] = $data['customer']->company;
         }
         if (!empty($data['user'])) {
             $vars['{%user.fullName%}'] = $data['user']->getFullName();
@@ -209,10 +225,23 @@ class Mail
         if ($escape) {
             foreach ($vars as $i => $var) {
                 $vars[$i] = htmlspecialchars($var ?? '');
+                $vars[$i] = nl2br($vars[$i]);
+            }
+        } else {
+            foreach ($vars as $i => $var) {
+                $vars[$i] = nl2br($var ?? '');
             }
         }
 
-        return strtr($text, $vars);
+        $result = strtr($text, $vars);
+
+        // Remove non-replaced placeholders.
+        if ($remove_non_replaced) {
+            $result = preg_replace('#\{%[^\.%\}]+\.[^%\}]+%\}#', '', $result ?? '');
+            $result = trim($result);
+        }
+
+        return $result;
     }
 
     /**
@@ -220,7 +249,7 @@ class Mail
      */
     public static function hasVars($text)
     {
-        return preg_match('/({%|%})/', $text);
+        return preg_match('/({%|%})/', $text ?? '');
     }
 
     /**
@@ -455,6 +484,11 @@ class Mail
         return '';
     }
 
+    public static function getMessageIdHash($thread_id)
+    {
+        return substr(md5($thread_id.config('app.key')), 0, 16);
+    }
+
     /**
      * Detect autoresponder by headers.
      * https://github.com/jpmckinney/multi_mail/wiki/Detecting-autoresponders
@@ -467,7 +501,7 @@ class Mail
         $autoresponder_headers = [
             'x-autoreply'    => '',
             'x-autorespond'  => '',
-            'auto-submitted' => 'auto-replied',
+            'auto-submitted' => '', // this can be auto-replied, auto-generated, etc.
             'precedence' => ['auto_reply', 'bulk', 'junk'],
             'x-precedence' => ['auto_reply', 'bulk', 'junk'],
         ];
@@ -563,7 +597,10 @@ class Mail
      */
     public static function getMailboxClient($mailbox)
     {
-        if (!$mailbox->oauthEnabled()) {
+        $oauth = $mailbox->oauthEnabled();
+        $new_library = config('app.new_fetching_library');
+
+        if (!$oauth && !$new_library) {
             return new \Webklex\IMAP\Client([
                 'host'          => $mailbox->in_server,
                 'port'          => $mailbox->in_port,
@@ -575,16 +612,32 @@ class Mail
             ]);
         } else {
 
-            \Config::set('imap.accounts.default', [
-                'host'          => $mailbox->in_server,
-                'port'          => $mailbox->in_port,
-                'encryption'    => $mailbox->getInEncryptionName(),
-                'validate_cert' => $mailbox->in_validate_cert,
-                'username'      => $mailbox->email,
-                'password'      => $mailbox->oauthGetParam('a_token'),
-                'protocol'      => $mailbox->getInProtocolName(),
-                'authentication' => 'oauth',
-            ]);
+            if ($oauth) {
+                \Config::set('imap.accounts.default', [
+                    'host'          => $mailbox->in_server,
+                    'port'          => $mailbox->in_port,
+                    'encryption'    => $mailbox->getInEncryptionName(),
+                    'validate_cert' => $mailbox->in_validate_cert,
+                    'username'      => $mailbox->email,
+                    'password'      => $mailbox->oauthGetParam('a_token'),
+                    'protocol'      => $mailbox->getInProtocolName(),
+                    'authentication' => 'oauth',
+                ]);
+            } else {
+                \Config::set('imap.accounts.default', [
+                    'host'          => $mailbox->in_server,
+                    'port'          => $mailbox->in_port,
+                    'encryption'    => $mailbox->getInEncryptionName(),
+                    'validate_cert' => $mailbox->in_validate_cert,
+                    // 'username'      => $mailbox->email,
+                    // 'password'      => $mailbox->oauthGetParam('a_token'),
+                    // 'protocol'      => $mailbox->getInProtocolName(),
+                    // 'authentication' => 'oauth',
+                    'username'      => $mailbox->in_username,
+                    'password'      => $mailbox->in_password,
+                    'protocol'      => $mailbox->getInProtocolName(),
+                ]);
+            }
             // To enable debug: /vendor/webklex/php-imap/src/Connection/Protocols
             // Debug in console
             if (app()->runningInConsole()) {
@@ -594,24 +647,26 @@ class Mail
             $cm = new \Webklex\PHPIMAP\ClientManager(config('imap'));
 
             // Refresh Access Token.
-            if ((strtotime($mailbox->oauthGetParam('issued_on')) + (int)$mailbox->oauthGetParam('expires_in')) < time()) {
-                // Try to get an access token (using the authorization code grant)
-                $token_data = \MailHelper::oauthGetAccessToken(\MailHelper::OAUTH_PROVIDER_MICROSOFT, [
-                    'client_id' => $mailbox->in_username,
-                    'client_secret' => $mailbox->in_password,
-                    'refresh_token' => $mailbox->oauthGetParam('r_token'),
-                ]);
-
-                if (!empty($token_data['a_token'])) {
-                    $mailbox->setMetaParam('oauth', $token_data, true);
-                } elseif (!empty($token_data['error'])) {
-                    $error_message = 'Error occurred refreshing oAuth Access Token: '.$token_data['error'];
-                    \Helper::log(\App\ActivityLog::NAME_EMAILS_FETCHING, 
-                        \App\ActivityLog::DESCRIPTION_EMAILS_FETCHING_ERROR, [
-                        'error'   => $error_message,
-                        'mailbox' => $mailbox->name,
+            if ($oauth) {
+                if ((strtotime($mailbox->oauthGetParam('issued_on')) + (int)$mailbox->oauthGetParam('expires_in')) < time()) {
+                    // Try to get an access token (using the authorization code grant)
+                    $token_data = \MailHelper::oauthGetAccessToken(\MailHelper::OAUTH_PROVIDER_MICROSOFT, [
+                        'client_id' => $mailbox->in_username,
+                        'client_secret' => $mailbox->in_password,
+                        'refresh_token' => $mailbox->oauthGetParam('r_token'),
                     ]);
-                    throw new \Exception($error_message, 1);
+
+                    if (!empty($token_data['a_token'])) {
+                        $mailbox->setMetaParam('oauth', $token_data, true);
+                    } elseif (!empty($token_data['error'])) {
+                        $error_message = 'Error occurred refreshing oAuth Access Token: '.$token_data['error'];
+                        \Helper::log(\App\ActivityLog::NAME_EMAILS_FETCHING, 
+                            \App\ActivityLog::DESCRIPTION_EMAILS_FETCHING_ERROR, [
+                            'error'   => $error_message,
+                            'mailbox' => $mailbox->name,
+                        ]);
+                        throw new \Exception($error_message, 1);
+                    }
                 }
             }
 
@@ -638,7 +693,7 @@ class Mail
     /**
      * Fetch IMAP message by Message-ID.
      */
-    public static function fetchMessage($mailbox, $message_id)
+    public static function fetchMessage($mailbox, $message_id, $message_date = null)
     {
         $no_charset = false;
 
@@ -654,13 +709,23 @@ class Mail
             return null;
         }
 
-        $imap_folders = $mailbox->getInImapFolders();
+        $imap_folders = \Eventy::filter('mail.fetch_message.imap_folders', $mailbox->getInImapFolders(), $mailbox);
 
         foreach ($imap_folders as $folder_name) {
             try {
-                $folder = $client->getFolder($folder_name);
+                $folder = self::getImapFolder($client, $folder_name);
                 // Message-ID: <123@123.com>
-                $query = $folder->query()->text('<'.$message_id.'>')->leaveUnread()->limit(1);
+                $query = $folder->query()
+                    ->text('<'.$message_id.'>')
+                    ->leaveUnread()
+                    ->limit(1);
+
+                // Limit using date to speed up the search.
+                if ($message_date) {
+                   $query->since($message_date->subDays(7));
+                   // Here we should add 14 days, as previous line subtracts 7 days.
+                   $query->before($message_date->addDays(14));
+                }
 
                 if ($no_charset) {
                     $query->setCharset(null);
@@ -676,7 +741,12 @@ class Mail
                 if ($last_error && stristr($last_error, 'The specified charset is not supported')) {
                     // Solution for MS mailboxes.
                     // https://github.com/freescout-helpdesk/freescout/issues/176
-                    $messages = $folder->query()->text('<'.$message_id.'>')->leaveUnread()->limit(1)->setCharset(null)->get();
+                    $query = $folder->query()->text('<'.$message_id.'>')->leaveUnread()->limit(1)->setCharset(null);
+                    if ($message_date) {
+                       $query->since($message_date->subDays(7));
+                       $query->before($message_date->addDays(7));
+                    }
+                    $messages = $query->get();
                     $no_charset = true;
                 }
 
@@ -749,8 +819,9 @@ class Mail
                 //curl_setopt($curl, CURLOPT_HTTPHEADER, $headers);
                 curl_setopt($curl, CURLOPT_POSTFIELDS, $post_params);
                 curl_setopt($curl, CURLOPT_HTTPHEADER, array("application/x-www-form-urlencoded"));
-                curl_setopt($curl, CURLOPT_SSL_VERIFYPEER, true);
                 curl_setopt($curl, CURLOPT_RETURNTRANSFER, 1);
+                \Helper::setCurlDefaultOptions($curl);
+                curl_setopt($curl, CURLOPT_TIMEOUT, 180);
 
                 $response = curl_exec($curl);
 
@@ -795,6 +866,154 @@ class Mail
                 return redirect()->away('https://login.microsoftonline.com/common/oauth2/v2.0/logout?post_logout_redirect_uri='.urlencode($redirect_uri));
             break;
         }
+    }
+
+    public static function prepareMailable($mailable)
+    {
+        $custom_headers_str = config('app.custom_mail_headers');
+
+        if (empty($custom_headers_str)) {
+            return;
+        }
+
+        $custom_headers = explode(';', $custom_headers_str);
+
+        $mailable->withSwiftMessage(function ($swiftmessage) use ($custom_headers) {
+            $headers = $swiftmessage->getHeaders();
+
+            foreach ($custom_headers as $custom_header) {
+                $header_parts = explode(':', $custom_header);
+
+                $header_name = trim($header_parts[0] ?? '');
+                $header_value = trim($header_parts[1] ?? '');
+                if ($header_name && $header_value) {
+                    $headers->addTextHeader($header_name, $header_value);
+                }
+            }
+            return $swiftmessage;
+        });
+    }
+
+    public static function getImapFolder($client, $folder_name)
+    {
+        if (method_exists($client, 'getFolderByPath')) {
+            return $client->getFolderByPath($folder_name);
+        } else {
+            return $client->getFolder($folder_name);
+        }
+    }
+
+    /**
+     * This function is used to decode email subjects and attachment names in Webklex libraries.
+     */
+    public static function decodeSubject($subject)
+    {
+        // Remove new lines as iconv_mime_decode() may loose a part separated by new line:
+        // =?utf-8?Q?Gesch=C3=A4ftskonto?= erstellen =?utf-8?Q?f=C3=BCr?=
+        //  249143
+        $subject = preg_replace("/[\r\n]/", '', $subject);
+        // https://github.com/freescout-helpdesk/freescout/issues/3185
+        $subject = str_ireplace('=?iso-2022-jp?', '=?iso-2022-jp-ms?', $subject);
+
+        // Sometimes imap_utf8() can't decode the subject, for example:
+        // =?iso-2022-jp?B?GyRCIXlCaBsoQjEzMhskQjlmISEhViUsITwlRyVzGyhCJhskQiUoJS8lOSVGJWolIiFXQGxMZ0U5JE4kPyRhJE4jURsoQiYbJEIjQSU1JW0lcyEhIVo3bjQpJSglLyU5JUYlaiUiISYlbyE8JS8hWxsoQg==?=
+        // and sometimes iconv_mime_decode() can't decode the subject.
+        // So we are using both.
+        // 
+        // We are trying iconv_mime_decode() first because imap_utf8()
+        // decodes umlauts into two symbols:
+        // https://github.com/freescout-helpdesk/freescout/issues/2965
+
+        // Sometimes subject is split into parts and each part is base63 encoded.
+        // And sometimes it's first encoded and after that split.
+        // https://github.com/freescout-helpdesk/freescout/issues/3066      
+
+        // Step 1. Abnormal way - text is encoded and split into parts.
+  
+        // Only one type of encoding should be used.
+        preg_match_all("/(=\?[^\?]+\?[BQ]\?)([^\?]+)(\?=)/i", $subject, $m);
+        $encodings = $m[1] ?? [];
+        array_walk($encodings, function($value) {
+            $value = strtolower($value);
+        });
+        $one_encoding = count(array_unique($encodings)) == 1;
+
+        if ($one_encoding) {
+            // First try to join all lines and parts.
+            // Keep in mind that there can be non-encoded parts also:
+            // =?utf-8?Q?Gesch=C3=A4ftskonto?= erstellen =?utf-8?Q?f=C3=BCr?=
+            preg_match_all("/(=\?[^\?]+\?[BQ]\?)([^\?]+)(\?=)[\r\n\t ]*/i", $subject, $m);
+
+            $joined_parts = '';
+            if (count($m[1]) > 1 && !empty($m[2]) && !preg_match("/[\r\n\t ]+[^=]/i", $subject)) {
+                // Example: GyRCQGlNVTtZRTkhIT4uTlMbKEI=
+                $joined_parts = $m[1][0].implode('', $m[2]).$m[3][0];
+
+                // Base64 and URL encoded string can't contain "=" in the middle
+                // https://stackoverflow.com/questions/6916805/why-does-a-base64-encoded-string-have-an-sign-at-the-end
+                $has_equal_in_the_middle = preg_match("#=+([^$\? =])#", $joined_parts);
+
+                if (!$has_equal_in_the_middle) {
+                    $subject_decoded = iconv_mime_decode($joined_parts, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, "UTF-8");
+
+                    if ($subject_decoded 
+                        && trim($subject_decoded) != trim($joined_parts)
+                        && trim($subject_decoded) != trim(rtrim($joined_parts, '='))
+                        && !self::isNotYetFullyDecoded($subject_decoded)
+                    ) {
+                        return $subject_decoded;
+                    }
+
+                    // Try imap_utf8().
+                    // =?iso-2022-jp?B?IBskQiFaSEcyPDpuQ?= =?iso-2022-jp?B?C4wTU1qIVs3Mkp2JSIlLyU3JSItahsoQg==?=
+                    $subject_decoded = \imap_utf8($joined_parts);
+
+                    if ($subject_decoded 
+                        && trim($subject_decoded) != trim($joined_parts)
+                        && trim($subject_decoded) != trim(rtrim($joined_parts, '='))
+                        && !self::isNotYetFullyDecoded($subject_decoded)
+                    ) {
+                        return $subject_decoded;
+                    }
+                }
+            }
+        }
+
+        // Step 2. Standard way - each part is encoded separately.
+
+        // iconv_mime_decode() can't decode:
+        // =?iso-2022-jp?B?IBskQiFaSEcyPDpuQC4wTU1qIVs3Mkp2JSIlLyU3JSItahsoQg==?=
+        $subject_decoded = iconv_mime_decode($subject, ICONV_MIME_DECODE_CONTINUE_ON_ERROR, "UTF-8");
+
+        // Sometimes iconv_mime_decode() can't decode some parts of the subject:
+        // =?iso-2022-jp?B?IBskQiFaSEcyPDpuQC4wTU1qIVs3Mkp2JSIlLyU3JSItahsoQg==?=
+        // =?iso-2022-jp?B?GyRCQGlNVTtZRTkhIT4uTlMbKEI=?=
+        if (self::isNotYetFullyDecoded($subject_decoded)) {
+            $subject_decoded = \imap_utf8($subject);
+        }
+
+        // All previous functions could not decode text.
+        // mb_decode_mimeheader() properly decodes umlauts into one unice symbol.
+        // But we use mb_decode_mimeheader() as a last resort as it may garble some symbols.
+        // Example: =?ISO-8859-1?Q?Vorgang 538336029: M=F6chten Sie Ihre E-Mail-Adresse =E4ndern??=
+        if (self::isNotYetFullyDecoded($subject_decoded)) {
+            $subject_decoded = mb_decode_mimeheader($subject);
+        }
+
+        if (!$subject_decoded) {
+            $subject_decoded = $subject;
+        }
+
+        return $subject_decoded;
+    }
+
+    public static function isNotYetFullyDecoded($subject_decoded) {
+        // https://stackoverflow.com/questions/15276191/why-does-a-diamond-with-a-questionmark-in-it-appear-in-my-html
+        $invalid_utf_symbols = ['�'];
+
+        return preg_match_all("/=\?[^\?]+\?[BQ]\?/i", $subject_decoded)
+            || !mb_check_encoding($subject_decoded, 'UTF-8')
+            || \Str::contains($subject_decoded, $invalid_utf_symbols);
     }
 
     // public static function oauthGetProvider($provider_code, $params)

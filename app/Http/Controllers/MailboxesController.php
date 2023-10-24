@@ -87,9 +87,10 @@ class MailboxesController extends Controller
 
         $mailbox = new Mailbox();
         $mailbox->fill($request->all());
+
         $mailbox->save();
 
-        $mailbox->users()->sync($request->users);
+        $mailbox->users()->sync($request->users ?: []);
         $mailbox->syncPersonalFolders($request->users);
 
         \Session::flash('flash_success_floating', __('Mailbox created successfully'));
@@ -108,7 +109,12 @@ class MailboxesController extends Controller
             $accessible_route = '';
 
             $mailbox_settings = $user->mailboxSettings($mailbox->id);
-            $access_permissions = json_decode($mailbox_settings->access ?? '');
+            
+            if (!is_array($mailbox_settings->access)) {
+                $access_permissions = json_decode($mailbox_settings->access ?? '');
+            } else {
+                $access_permissions = $mailbox_settings->access;
+            }
 
             if ($access_permissions && is_array($access_permissions)) {
                 foreach ($access_permissions as $perm) {
@@ -160,6 +166,11 @@ class MailboxesController extends Controller
 
         if ($user->can('updateSettings', $mailbox)) {
 
+            // Checkboxes
+            $request->merge([
+                'aliases_reply' => ($request->filled('aliases_reply') ?? false),
+            ]);
+
             // if not admin, the text only fields don't pass so spike them into the request.
             if (!auth()->user()->isAdmin()) {
                 $request->merge([
@@ -185,7 +196,9 @@ class MailboxesController extends Controller
                 $validator->errors()->add('email', __('There is a user with such email. Users and mailboxes can not have the same email addresses.'));
             }
 
-            if ($invalid || $validator->fails()) {
+            $validator = \Eventy::filter('mailbox.settings_validator', $validator, $mailbox, $request);
+
+            if ($invalid || count($validator->errors()) || $validator->fails()) {
                 return redirect()->route('mailboxes.update', ['id' => $id])
                             ->withErrors($validator)
                             ->withInput();
@@ -204,7 +217,7 @@ class MailboxesController extends Controller
             }
         }
 
-        \Eventy::action( 'mailboxes.settings_before_save', $id, $request );
+        \Eventy::action('mailbox.settings_before_save', $mailbox, $request);
 
         $mailbox->fill($request->all());
 
@@ -256,7 +269,7 @@ class MailboxesController extends Controller
 
         $user = auth()->user();
 
-        $mailbox->users()->sync($request->users);
+        $mailbox->users()->sync(\Eventy::filter('mailbox.permission_users', $request->users, $id) ?: []);
         $mailbox->syncPersonalFolders($request->users);
 
         // Save admins settings.
@@ -278,7 +291,7 @@ class MailboxesController extends Controller
             $access = [];
             $mailbox_with_settings = $mailbox_user->mailboxesWithSettings()->where('mailbox_id', $id)->first();
 
-            foreach (\App\Mailbox::$access_permissions as $perm) {
+            foreach (Mailbox::$access_permissions as $perm) {
                 if (!empty($request->managers[$mailbox_user->id]['access'][$perm])) {
                     $access[] = $request->managers[$mailbox_user->id]['access'][$perm];
                 }
@@ -334,7 +347,7 @@ class MailboxesController extends Controller
         }
 
         // Do not save dummy password.
-        if (preg_match("/^\*+$/", $request->out_password)) {
+        if (preg_match("/^\*+$/", $request->out_password ?? '')) {
             $params = $request->except(['out_password']);
         } else {
             $params = $request->all();
@@ -347,7 +360,7 @@ class MailboxesController extends Controller
         }
 
         // Sometimes background job continues to use old connection settings.
-        \Helper::queueWorkRestart();
+        \Helper::queueWorkerRestart();
 
         \Session::flash('flash_success_floating', __('Connection settings saved!'));
 
@@ -412,6 +425,8 @@ class MailboxesController extends Controller
             $params = $request->all();
         }
 
+        \Eventy::action('mailbox.incoming_settings_before_save', $mailbox, $request);
+
         $mailbox->fill($params);
 
         // Save IMAP Folders.
@@ -434,15 +449,11 @@ class MailboxesController extends Controller
     /**
      * View mailbox.
      */
-    public function view($id, $folder_id = null)
+    public function view(Request $request, $id, $folder_id = null)
     {
         $user = auth()->user();
 
-        if ($user->isAdmin()) {
-            $mailbox = Mailbox::findOrFailWithSettings($id, $user->id);
-        } else {
-            $mailbox = Mailbox::findOrFail($id);
-        }
+        $mailbox = Mailbox::findOrFailWithSettings($id, $user->id);
         $this->authorize('viewCached', $mailbox);
 
         $folders = $mailbox->getAssesibleFolders();
@@ -463,7 +474,9 @@ class MailboxesController extends Controller
         $this->authorize('view', $folder);
 
         $query_conversations = Conversation::getQueryByFolder($folder, $user->id);
-        $conversations = $folder->queryAddOrderBy($query_conversations)->paginate(Conversation::DEFAULT_LIST_SIZE);
+        $conversations = $folder->queryAddOrderBy($query_conversations)->paginate(
+            Conversation::DEFAULT_LIST_SIZE, ['*'], 'page', $request->get('page')
+        );
 
         return view('mailboxes/view', [
             'mailbox'       => $mailbox,
@@ -701,8 +714,13 @@ class MailboxesController extends Controller
                                 // Maybe we need a recursion here.
                                 if (!empty($imap_folder->children)) {
                                     foreach ($imap_folder->children as $child_imap_folder) {
+                                        // Old library.
                                         if (!empty($child_imap_folder->fullName)) {
                                             $response['folders'][] = $child_imap_folder->fullName;
+                                        }
+                                        // New library.
+                                        if (!empty($child_imap_folder->full_name)) {
+                                            $response['folders'][] = $child_imap_folder->full_name;
                                         }
                                     }
                                 }
@@ -733,15 +751,20 @@ class MailboxesController extends Controller
                     $response['msg'] = __('Mailbox not found');
                 } elseif (!$user->can('admin', $mailbox)) {
                     $response['msg'] = __('Not enough permissions');
-                } elseif (!Hash::check($request->password, $user->password)) {
+                } elseif (!$user->isDummyPassword() && !Hash::check($request->password ?? '', $user->password)) {
                     $response['msg'] = __('Please double check your password, and try again');
                 }
 
                 if (!$response['msg']) {
 
-                    // Remove threads and conversations
-                    Thread::whereIn('conversation_id', $mailbox->conversations()->pluck('id')->toArray())
-                        ->delete();
+                    // Remove threads and conversations.
+                    $conversation_ids = $mailbox->conversations()->pluck('id')->toArray();
+                    
+                    for ($i=0; $i < ceil(count($conversation_ids) / \Helper::IN_LIMIT); $i++) { 
+                        $slice_ids = array_slice($conversation_ids, $i*\Helper::IN_LIMIT, \Helper::IN_LIMIT);
+                        Thread::whereIn('conversation_id', $slice_ids)->delete();
+                    }
+
                     $mailbox->conversations()->delete();
                     $mailbox->users()->sync([]);
                     $mailbox->folders()->delete();
@@ -761,8 +784,6 @@ class MailboxesController extends Controller
 
                 if (!$mailbox) {
                     $response['msg'] = __('Mailbox not found');
-                } elseif (!$user->isAdmin()) {
-                    $response['msg'] = __('Not enough permissions');
                 }
 
                 if (!$response['msg']) {
@@ -786,7 +807,7 @@ class MailboxesController extends Controller
         }
 
         if ($response['status'] == 'error' && empty($response['msg'])) {
-            $response['msg'] = 'Unknown error occured';
+            $response['msg'] = 'Unknown error occurred';
         }
 
         return \Response::json($response);

@@ -17,8 +17,8 @@ class Folder extends Model
     const TYPE_DRAFTS = 30;
     const TYPE_ASSIGNED = 40;
     const TYPE_CLOSED = 60;
+    const TYPE_DELETED = 70;
     const TYPE_SPAM = 80;
-    const TYPE_DELETED = 110;
 
     public static $types = [
         self::TYPE_UNASSIGNED => 'Unassigned',
@@ -160,6 +160,7 @@ class Folder extends Model
 
             case self::TYPE_CLOSED:
                 $order_by = [['closed_at' => 'desc']];
+                break;
 
             case self::TYPE_SPAM:
                 $order_by = [['last_reply_at' => 'desc']];
@@ -221,6 +222,15 @@ class Folder extends Model
     }
 
     public function updateCounters()
+    {
+        if (config('app.update_folder_counters_in_background')) {
+            \App\Jobs\UpdateFolderCounters::dispatch($this);
+        } else {
+            $this->updateCountersNow();
+        }
+    }
+
+    public function updateCountersNow()
     {
         if (\Eventy::filter('folder.update_counters', false, $this)) {
             return;
@@ -407,5 +417,40 @@ class Folder extends Model
         }
 
         return $folder;
+    }
+
+    /**
+     * Get meta value.
+     */
+    public function getMeta($key, $default = null)
+    {
+        $metas = $this->meta;
+        if (isset($metas[$key])) {
+            return $metas[$key];
+        } else {
+            return $default;
+        }
+    }
+
+    /**
+     * Set meta value.
+     */
+    public function setMeta($key, $value)
+    {
+        $metas = $this->meta;
+        $metas[$key] = $value;
+        $this->meta = $metas;
+    }
+
+    /**
+     * Unset thread meta value.
+     */
+    public function unsetMeta($key)
+    {
+        $metas = $this->meta;
+        if (isset($metas[$key])) {
+            unset($metas[$key]);
+            $this->meta = $metas;
+        }
     }
 }

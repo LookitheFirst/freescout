@@ -103,13 +103,19 @@ class SettingsController extends Controller
                         'mail_password' => [
                             'safe_password' => true,
                             'encrypt' => true,
-                        ]
+                        ],
+                        // 'use_mail_date_on_fetching' => [
+                        //     'env' => 'APP_USE_MAIL_DATE_ON_FETCHING',
+                        // ],
                     ],
                 ];
                 break;
             case 'general':
                 $params = [
                     'settings' => [
+                        'custom_number' => [
+                            'env' => 'APP_CUSTOM_NUMBER',
+                        ],
                         'email_conv_history' => [
                             'env' => 'APP_EMAIL_CONV_HISTORY',
                         ],
@@ -167,6 +173,8 @@ class SettingsController extends Controller
                 break;
         }
 
+        $params = \Eventy::filter('settings.alter_section_params', $params, $section);
+
         if ($param) {
             if (isset($params[$param])) {
                 return $params[$param];
@@ -187,6 +195,7 @@ class SettingsController extends Controller
                 $settings = [
                     'company_name'         => Option::get('company_name', \Config::get('app.name')),
                     'next_ticket'          => (Option::get('next_ticket') >= Conversation::max('number') + 1) ? Option::get('next_ticket') : Conversation::max('number') + 1,
+                    'custom_number'        => (int)config('app.custom_number'),
                     'user_permissions'     => User::getGlobalUserPermissions(),
                     'email_branding'       => Option::get('email_branding'),
                     'open_tracking'        => Option::get('open_tracking'),
@@ -208,6 +217,7 @@ class SettingsController extends Controller
                     'mail_password'   => \Helper::decrypt(Option::get('mail_password', \Config::get('mail.password'))),
                     'mail_encryption' => Option::get('mail_encryption', \Config::get('mail.encryption')),
                     'fetch_schedule'  => config('app.fetch_schedule'),
+                    //'use_mail_date_on_fetching'             => config('app.use_mail_date_on_fetching'),
                 ];
                 break;
             case 'alerts':
@@ -229,6 +239,8 @@ class SettingsController extends Controller
                 $settings = \Eventy::filter('settings.section_settings', $settings, $section);
                 break;
         }
+
+        $settings = \Eventy::filter('settings.alter_section_settings', $settings, $section);
 
         return $settings;
     }
@@ -313,7 +325,7 @@ class SettingsController extends Controller
             }
 
             // By some reason isset() does not work for empty elements.
-            if (array_key_exists($option_name, $request->settings)) {
+            if (isset($request->settings) && array_key_exists($option_name, $request->settings)) {
                 $option_value = $request->settings[$option_name];
 
                 if (!empty($settings_params[$option_name]['encrypt'])) {
@@ -340,6 +352,8 @@ class SettingsController extends Controller
         }
 
         // Clear cache if some options have been saved to .env file.
+        // Clearing the cache also restarts queue:work as it also
+        // needs to get new .env parameters.
         if ($cc_required) {
             \Helper::clearCache(['--doNotGenerateVars' => true]);
         }
@@ -405,7 +419,7 @@ class SettingsController extends Controller
         }
 
         if ($response['status'] == 'error' && empty($response['msg'])) {
-            $response['msg'] = 'Unknown error occured';
+            $response['msg'] = 'Unknown error occurred';
         }
 
         return \Response::json($response);

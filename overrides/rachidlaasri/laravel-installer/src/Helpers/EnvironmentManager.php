@@ -105,10 +105,8 @@ class EnvironmentManager
         '# php artisan freescout:clear-cache'."\n\n".
         '# Application URL'."\n".
         'APP_URL='.$request->app_url."\n\n".
-        '# Use HTTP protocol and redirect to HTTPS'."\n".
-        'APP_FORCE_HTTPS='.$request->app_force_https."\n\n".
         '# Improve security'."\n".
-        'SESSION_SECURE_COOKIE='.$request->app_force_https."\n\n".
+        'SESSION_SECURE_COOKIE='.(\Helper::isHttps($request->app_url) ? 'true' : '')."\n\n".
         '# Timezones: https://github.com/freescout-helpdesk/freescout/wiki/PHP-Timezones'."\n".
         '# Comment it to use default timezone from php.ini'."\n".
         'APP_TIMEZONE='.$request->app_timezone."\n\n".
@@ -120,7 +118,7 @@ class EnvironmentManager
         'DB_PORT='.$request->database_port."\n".
         'DB_DATABASE='.$request->database_name."\n".
         'DB_USERNAME='.$request->database_username."\n".
-        'DB_PASSWORD='.$request->database_password."\n".
+        'DB_PASSWORD="'.str_replace('"', '\"\"', $request->database_password)."\"\n".
         (!empty($request->database_charset) ? 'DB_CHARSET='.$request->database_charset."\n" : '').
         (!empty($request->database_collation) ? 'DB_COLLATION='.$request->database_collation."\n" : '').
         "\n".

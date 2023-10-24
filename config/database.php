@@ -52,18 +52,38 @@ return [
             'prefix'      => '',
             'strict'      => false,
             'engine'      => null,
+            'options'     => extension_loaded('pdo_mysql') ? array_filter([
+                PDO::MYSQL_ATTR_SSL_CA => env('DB_MYSQL_ATTR_SSL_CA'),
+            ]) : [],
         ],
 
         'testing' => [
-            'driver'    => 'mysql',
-            'host'      => env('DB_TEST_HOST', 'localhost'),
-            'database'  => env('DB_TEST_DATABASE', 'homestead_test'),
-            'username'  => env('DB_TEST_USERNAME', 'homestead'),
-            'password'  => env('DB_TEST_PASSWORD', 'secret'),
-            'charset'   => 'utf8mb4',
-            'collation' => 'utf8mb4_unicode_ci',
-            'prefix'    => '',
-            'strict'    => false,
+            'driver'         => 'mysql',
+            //'url'            => env('DB_TEST_DATABASE_URL'),
+            'host'           => '127.0.0.1',
+            'database'       => 'freescout-test',
+            'username'       => env('DB_TEST_USERNAME', 'freescout-test'),
+            'password'       => env('DB_TEST_PASSWORD', 'freescout-test'),
+            //'port'           => env('DB_TEST_PORT', '3306'),
+            'charset'        => 'utf8mb4',
+            'collation'      => 'utf8mb4_unicode_ci',
+            'prefix'         => '',
+            //'prefix_indexes' => true,
+            'strict'         => false,
+            'engine'      => null,
+        ],
+
+        'testing_pgsql' => [
+            'driver'   => 'pgsql',
+            'host'     => 'localhost',
+            'port'     => '5432',
+            'database' => 'freescout-test',
+            'username' => env('DB_TEST_USERNAME', 'freescout-test'),
+            'password' => env('DB_TEST_PASSWORD', 'freescout-test'),
+            'charset'  => 'utf8',
+            'prefix'   => '',
+            'schema'   => 'public',
+            'sslmode'  => 'prefer',
         ],
 
         'pgsql' => [
@@ -76,7 +96,7 @@ return [
             'charset'  => 'utf8',
             'prefix'   => '',
             'schema'   => 'public',
-            'sslmode'  => 'prefer',
+            'sslmode'  => env('DB_PGSQL_SSLMODE', 'prefer'),
         ],
 
         'sqlsrv' => [

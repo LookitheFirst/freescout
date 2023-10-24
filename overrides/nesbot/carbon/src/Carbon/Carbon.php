@@ -877,6 +877,11 @@ class Carbon extends DateTime implements JsonSerializable
     #[\ReturnTypeWillChange]
     public static function createFromFormat($format, $time, $tz = null)
     {
+        // FreeScout fix for PostgreSQL timestamp fields.
+        if ($format == 'Y-m-d H:i:s' && strstr($time, '+')) {
+            $time = preg_replace("/\+.*/", '', $time);
+        } 
+        
         // First attempt to create an instance, so that error messages are based on the unmodified format.
         $date = self::createFromFormatAndTimezone($format, $time, $tz);
         $lastErrors = parent::getLastErrors();
@@ -919,8 +924,11 @@ class Carbon extends DateTime implements JsonSerializable
      *
      * @return void
      */
-    private static function setLastErrors(array $lastErrors)
+    private static function setLastErrors($lastErrors)
     {
+        if (!is_array($lastErrors)) {
+            return;
+        }
         static::$lastErrors = $lastErrors;
     }
 
@@ -1841,7 +1849,17 @@ class Carbon extends DateTime implements JsonSerializable
             $format = preg_replace('#(?<!%)((?:%%)*)%e#', '\1%#d', $format); // @codeCoverageIgnore
         }
 
-        $formatted = strftime($format, strtotime($this->toDateTimeString()));
+        // https://php.watch/versions/8.1/strftime-gmstrftime-deprecated
+        //$formatted = strftime($format, strtotime($this->toDateTimeString()));
+        $formatter = new \IntlDateFormatter(
+            config('app.locale'), 
+            \IntlDateFormatter::LONG,
+            \IntlDateFormatter::NONE,
+            config('app.timezone'),
+            \IntlDateFormatter::GREGORIAN,
+            $format
+        );
+        $formatted = datefmt_format($formatter, strtotime($this->toDateTimeString()));
 
         return static::$utf8 ? utf8_encode($formatted) : $formatted;
     }
